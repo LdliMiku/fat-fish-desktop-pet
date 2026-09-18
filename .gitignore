@@ -1,0 +1,6 @@
+/.build/
+/data/
+/demo/
+*.log
+Thumbs.db
+Desktop.ini
