@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -53,11 +53,14 @@ namespace FatFishPet
 
     internal sealed class PetMotion
     {
+        internal const int FrameCount=50;
+        internal static readonly int[] DirectionFrames={16,17,18,19,21,22,23,24};
         public AnimationRates Rates = new AnimationRates();
         private double actionClock, breathClock, swayClock, blinkClock, lastClock;
         private double targetX, targetY, lookX, lookY, lookVX, lookVY, lastGazeTime;
         private double lastMouseX, lastMouseY, lastMouseMove;
         private bool mouseSeen, gazeClockStarted;
+        private int gazeSector=-1;
         private readonly Random blinkRandom = new Random();
         private double nextBlink = 3.4, blinkStarted = -10, blinkAmount;
         private double stateStarted;
@@ -76,10 +79,19 @@ namespace FatFishPet
                 mouseSeen = true; lastMouseX = x; lastMouseY = y; lastMouseMove = now;
             }
             double radius = Math.Sqrt(x*x+y*y);
-            double strength = Ease((radius - 45) / 240);
-            if (now-lastMouseMove >= 5) strength = 0;
-            targetX = radius > 0 ? x/Math.Max(Math.Abs(x),Math.Abs(y))*strength : 0;
-            targetY = radius > 0 ? y/Math.Max(Math.Abs(x),Math.Abs(y))*strength : 0;
+            if(now-lastMouseMove>=5||radius<(gazeSector<0?95:65))
+            {gazeSector=-1;targetX=targetY=0;return;}
+            // Settle on an actual drawn pose rather than holding a permanent blend of different faces.
+            double angle=Math.Atan2(y,x),sectorAngle=Math.PI/4;
+            int candidate=((int)Math.Round(angle/sectorAngle)+8)%8;
+            if(gazeSector>=0)
+            {
+                double difference=Math.Atan2(Math.Sin(angle-gazeSector*sectorAngle),Math.Cos(angle-gazeSector*sectorAngle));
+                if(Math.Abs(difference)<=sectorAngle*.5+7*Math.PI/180)candidate=gazeSector;
+            }
+            gazeSector=candidate;
+            targetX=candidate==0||candidate==1||candidate==7?1:candidate>=3&&candidate<=5?-1:0;
+            targetY=candidate>=1&&candidate<=3?1:candidate>=5?-1:0;
         }
 
         public void BeginLift(double now)
@@ -201,14 +213,23 @@ namespace FatFishPet
         internal static double[] GazeWeights(double x,double y)
         {
             x=Math.Max(-1,Math.Min(1,x));y=Math.Max(-1,Math.Min(1,y));
-            double ax=Math.Abs(x),ay=Math.Abs(y);var w=new double[34];
-            int horizontal=x<0?19:21,vertical=y<0?17:23;
-            int diagonal=y<0?(x<0?16:18):(x<0?22:24);
-            w[0]=1-Math.Max(ax,ay);
-            w[diagonal]=Math.Min(ax,ay);
-            if(ax>=ay)w[horizontal]=ax-ay;else w[vertical]=ay-ax;
+            // Remove the last sub-pixel mixture once pursuit is visually settled.
+            if(Math.Abs(x)<.002)x=0;else if(Math.Abs(x)>.998)x=Math.Sign(x);
+            if(Math.Abs(y)<.002)y=0;else if(Math.Abs(y)>.998)y=Math.Sign(y);
+            double ax=Math.Abs(x),ay=Math.Abs(y),radius=Math.Max(ax,ay);var w=new double[FrameCount];
+            if(radius==0){w[0]=1;return w;}
+            int cardinal=ax>=ay?(x<0?3:4):(y<0?1:6),diagonal=y<0?(x<0?0:2):(x<0?5:7);
+            double angular=Math.Min(ax,ay)/radius,scaled=radius*2;
+            int inner=Math.Min(1,(int)scaled),outer=inner+1;double radial=scaled-inner;
+            w[RingFrame(inner,cardinal)]+=(1-radial)*(1-angular);
+            w[RingFrame(inner,diagonal)]+=(1-radial)*angular;
+            w[RingFrame(outer,cardinal)]+=radial*(1-angular);
+            w[RingFrame(outer,diagonal)]+=radial*angular;
             return w;
         }
+
+        private static int RingFrame(int ring,int direction)
+        {return ring==0?0:ring==1?34+direction:DirectionFrames[direction];}
 
         private static void Follow(ref double position, ref double speed, double target, double dt)
         {
@@ -219,9 +240,9 @@ namespace FatFishPet
             position=Math.Max(-1,Math.Min(1,position+speed*dt));
         }
 
-        private static double[] Single(int frame) { var weights = new double[34]; weights[frame] = 1; return weights; }
-        private static double[] Between(int from, int to, double t) { var weights = new double[34]; weights[from] += 1 - t; weights[to] += t; return weights; }
-        private static double[] Mix(double[] a, double[] b, double t) { var weights = new double[34]; for (int i = 0; i < 34; i++) weights[i] = Lerp(a[i], b[i], t); return weights; }
+        private static double[] Single(int frame) { var weights = new double[PetMotion.FrameCount]; weights[frame] = 1; return weights; }
+        private static double[] Between(int from, int to, double t) { var weights = new double[PetMotion.FrameCount]; weights[from] += 1 - t; weights[to] += t; return weights; }
+        private static double[] Mix(double[] a, double[] b, double t) { var weights = new double[PetMotion.FrameCount]; for (int i = 0; i < PetMotion.FrameCount; i++) weights[i] = Lerp(a[i], b[i], t); return weights; }
         private static double Lerp(double a, double b, double t) { return a + (b - a) * t; }
         private static double Ease(double t) { t = Math.Max(0, Math.Min(1, t)); return t * t * (3 - 2 * t); }
     }
@@ -236,12 +257,12 @@ namespace FatFishPet
         private const int CanvasHeight = 360;
         private readonly Stopwatch clock = Stopwatch.StartNew();
         private readonly PetMotion motion = new PetMotion();
-        private readonly BitmapSource[] frames = new BitmapSource[34];
-        private readonly byte[][] pixels = new byte[34][];
+        private readonly BitmapSource[] frames = new BitmapSource[PetMotion.FrameCount];
+        private readonly byte[][] pixels = new byte[PetMotion.FrameCount][];
         private readonly byte[] mixPixels = new byte[CanvasWidth * CanvasHeight * 4];
-        private readonly int[] activeFrames = new int[34];
-        private readonly int[] activeWeights = new int[34];
-        private readonly int[] previousWeights = new int[34];
+        private readonly int[] activeFrames = new int[PetMotion.FrameCount];
+        private readonly int[] activeWeights = new int[PetMotion.FrameCount];
+        private readonly int[] previousWeights = new int[PetMotion.FrameCount];
         private readonly PetMotionWarp warp = new PetMotionWarp();
         private readonly Dictionary<int, BitmapSource> tweenCache = new Dictionary<int, BitmapSource>();
         private readonly Queue<int> tweenOrder = new Queue<int>();
@@ -251,6 +272,9 @@ namespace FatFishPet
         private double previousRenderClock;
         private double diagnosticStarted;
         private bool diagnosticsFinished;
+        private readonly List<double> activeIntervals=new List<double>(), inactiveIntervals=new List<double>(), drawTimes=new List<double>();
+        private bool previousActive;
+        private int diagnosticWindows;
         private bool subscribed;
         private bool disposed;
         private bool previousWasMix;
@@ -286,10 +310,10 @@ namespace FatFishPet
 
         private void LoadFrames(SpriteAtlas bank)
         {
-            if (bank == null || bank.Frames == null || bank.Frames.Length != 34 || bank.BaseHeight <= 0) throw new InvalidOperationException("角色动画配置不完整。");
+            if (bank == null || bank.Frames == null || bank.Frames.Length != PetMotion.FrameCount || bank.BaseHeight <= 0) throw new InvalidOperationException("角色动画配置不完整。");
             var bitmap = LoadBitmap("UnifiedSprites");
             double factor = CharacterHeight / bank.BaseHeight;
-            for (int i = 0; i < 34; i++)
+            for (int i = 0; i < PetMotion.FrameCount; i++)
             {
                 SpriteFrame frame = bank.Frames[i];
                 factor = CharacterHeight / (frame.ScaleHeight > 0 ? frame.ScaleHeight : bank.BaseHeight);
@@ -303,20 +327,30 @@ namespace FatFishPet
                 rendered.Render(visual); rendered.Freeze(); frames[i] = rendered;
                 pixels[i] = new byte[CanvasWidth * CanvasHeight * 4]; rendered.CopyPixels(pixels[i], CanvasWidth * 4, 0);
             }
-            // The ahoge is a shared animation layer: keep its neutral orientation on right turns.
-            foreach(int index in new[]{18,21,24})
+            // Use clean generated top-of-head patches. Keep each original face and body untouched.
+            AnimationAtlas repairs;
+            using(var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("HeadRepairAtlas"))
+                repairs=(AnimationAtlas)new DataContractJsonSerializer(typeof(AnimationAtlas)).ReadObject(stream);
+            var repairSheet=LoadBitmap("HeadRepairs");int[] targets={18,21,24};
+            for(int i=0;i<targets.Length;i++)
             {
-                // Feather the attachment into the moving head instead of cutting a horizontal seam.
-                for(int y=0;y<80;y++)for(int x=0;x<CanvasWidth;x++)
+                int index=targets[i];var f=repairs.Sheet.Frames[i];double repairScale=CharacterHeight/f.ScaleHeight;
+                var crop=new CroppedBitmap(repairSheet,new Int32Rect(f.X,f.Y,f.Width,f.Height));
+                var visual=new DrawingVisual();using(var dc=visual.RenderOpen())
+                    dc.DrawImage(crop,new Rect(SceneWidth/2-f.HeadX*repairScale,Ground-f.Height*repairScale,f.Width*repairScale,f.Height*repairScale));
+                RenderOptions.SetBitmapScalingMode(visual,BitmapScalingMode.HighQuality);
+                var render=new RenderTargetBitmap(CanvasWidth,CanvasHeight,96,96,PixelFormats.Pbgra32);render.Render(visual);
+                var repairPixels=new byte[CanvasWidth*CanvasHeight*4];render.CopyPixels(repairPixels,CanvasWidth*4,0);
+                for(int y=0;y<115;y++)for(int x=0;x<CanvasWidth;x++)
                 {
-                    double weight=Math.Min(1,(80-y)/20.0);int p=(y*CanvasWidth+x)*4;
-                    for(int c=0;c<4;c++)pixels[index][p+c]=(byte)Math.Round(pixels[0][p+c]*weight+pixels[index][p+c]*(1-weight));
+                    int p=(y*CanvasWidth+x)*4;double weight=Math.Min(1,(115-y)/20.0);
+                    if(y>=95&&(pixels[index][p+3]<250||repairPixels[p+3]<250))continue;
+                    for(int c=0;c<4;c++)pixels[index][p+c]=(byte)Math.Round(repairPixels[p+c]*weight+pixels[index][p+c]*(1-weight));
                 }
                 var stable=BitmapSource.Create(CanvasWidth,CanvasHeight,96,96,PixelFormats.Pbgra32,null,pixels[index],CanvasWidth*4);
                 stable.Freeze();frames[index]=stable;
             }
         }
-
         private void OnRendering(object sender, EventArgs args)
         {
             var rendering = args as RenderingEventArgs;
@@ -326,7 +360,13 @@ namespace FatFishPet
             if (!diagnosticsFinished && !string.IsNullOrEmpty(DiagnosticPath) && now > 1)
             {
                 if (diagnosticStarted == 0) diagnosticStarted = now;
-                else if (previousRenderClock > 0) renderIntervals.Add((now - previousRenderClock) * 1000);
+                else if (previousRenderClock > 0)
+                {
+                    double interval=(now-previousRenderClock)*1000;renderIntervals.Add(interval);
+                    var window=Window.GetWindow(this);bool active=window!=null&&window.IsActive;
+                    if(active==previousActive)(active?activeIntervals:inactiveIntervals).Add(interval);
+                    previousActive=active;
+                }
                 if (now - diagnosticStarted >= 6) WriteDiagnostics(now - diagnosticStarted);
             }
             previousRenderClock = now;
@@ -341,23 +381,33 @@ namespace FatFishPet
 
         private void WriteDiagnostics(double duration)
         {
-            diagnosticsFinished = true;
+            diagnosticsFinished = ++diagnosticWindows>=20;
             if (renderIntervals.Count == 0) return;
             renderIntervals.Sort();
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(DiagnosticPath));
-                File.WriteAllLines(DiagnosticPath, new[]
+                File.AppendAllLines(DiagnosticPath, new[]
                 {
-                    "version=0.9", "renderCallbacks=" + renderIntervals.Count,
+                    "version=0.1", "renderCallbacks=" + renderIntervals.Count,
                     "seconds=" + duration.ToString("F3", CultureInfo.InvariantCulture),
                     "averageHz=" + (renderIntervals.Count / duration).ToString("F2", CultureInfo.InvariantCulture),
                     "p95Milliseconds=" + renderIntervals[(int)((renderIntervals.Count - 1) * .95)].ToString("F2", CultureInfo.InvariantCulture),
-                    "renderTier=" + (RenderCapability.Tier >> 16)
+                    "renderTier=" + (RenderCapability.Tier >> 16),
+                    "utc="+DateTime.UtcNow.ToString("o"),
+                    Statistics("active",activeIntervals),Statistics("inactive",inactiveIntervals),Statistics("draw",drawTimes)
                 });
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
+            renderIntervals.Clear();activeIntervals.Clear();inactiveIntervals.Clear();drawTimes.Clear();diagnosticStarted=clock.Elapsed.TotalSeconds;
+        }
+
+        private static string Statistics(string name,List<double> values)
+        {
+            if(values.Count==0)return name+"Count=0";
+            values.Sort();double sum=0;foreach(double value in values)sum+=value;
+            return string.Format(CultureInfo.InvariantCulture,"{0}Count={1} meanMs={2:F2} p95Ms={3:F2}",name,values.Count,sum/values.Count,values[(int)((values.Count-1)*.95)]);
         }
 
         public void BeginLift() { motion.BeginLift(clock.Elapsed.TotalSeconds); UpdatePose(); }
@@ -369,16 +419,18 @@ namespace FatFishPet
 
         protected override void OnRender(DrawingContext dc)
         {
+            long started=Stopwatch.GetTimestamp();
             base.OnRender(dc);
             if (ActualWidth <= 0 || ActualHeight <= 0) return;
             dc.PushTransform(new ScaleTransform(ActualWidth / SceneWidth, ActualHeight / SceneHeight));
             DrawPose(dc, pose); dc.Pop();
+            if(!diagnosticsFinished&&!string.IsNullOrEmpty(DiagnosticPath))drawTimes.Add((Stopwatch.GetTimestamp()-started)*1000.0/Stopwatch.Frequency);
         }
 
         private BitmapSource Composite(double[] weights)
         {
             int count = 0, total = 0, strongest = 0;
-            for (int i = 0; i < 34; i++)
+            for (int i = 0; i < PetMotion.FrameCount; i++)
             {
                 int weight = (int)Math.Round(weights[i] * 256);
                 if (weight <= 0) continue;
@@ -395,7 +447,7 @@ namespace FatFishPet
                 previousWasMix = false;
                 int a=activeFrames[0],b=activeFrames[1],step=(int)Math.Round(activeWeights[1]/16.0);
                 if(step==0)return frames[a];if(step==16)return frames[b];
-                int key=(a*64+b)*17+step;
+                int key=(a*128+b)*17+step;
                 BitmapSource cached;if(tweenCache.TryGetValue(key,out cached))return cached;
                 warp.Render(a,b,step/16f,pixels[a],pixels[b],mixPixels);
                 cached=BitmapSource.Create(CanvasWidth,CanvasHeight,96,96,PixelFormats.Pbgra32,null,mixPixels,CanvasWidth*4);cached.Freeze();
@@ -404,12 +456,12 @@ namespace FatFishPet
                 return cached;
             }
             bool changed = !previousWasMix;
-            for (int i = 0; i < 34; i++) { int value = (int)Math.Round(weights[i] * 256); if (previousWeights[i] != value) changed = true; previousWeights[i] = value; }
+            for (int i = 0; i < PetMotion.FrameCount; i++) { int value = (int)Math.Round(weights[i] * 256); if (previousWeights[i] != value) changed = true; previousWeights[i] = value; }
             if (!changed) return mixed;
             var sourcePixels=new byte[count][];var sourceWeights=new float[count];
             for(int i=0;i<count;i++){sourcePixels[i]=pixels[activeFrames[i]];sourceWeights[i]=activeWeights[i]/256f;}
             warp.RenderWeighted(activeFrames,sourceWeights,sourcePixels,count,mixPixels);
-            // Interpolate premultiplied RGBA, not overlapping semi-transparent images: opaque areas stay opaque.
+            // Geometry follows the motion weights; the renderer samples one drawing only.
             mixed.WritePixels(new Int32Rect(0, 0, CanvasWidth, CanvasHeight), mixPixels, CanvasWidth * 4, 0);
             previousWasMix = true;
             return mixed;
@@ -417,10 +469,11 @@ namespace FatFishPet
 
         private readonly Dictionary<int, byte[]> blinkCache = new Dictionary<int, byte[]>();
         private readonly Queue<int> blinkOrder = new Queue<int>();
-        private readonly int[] gazeFrames=new int[3];
-        private readonly float[] gazeWeights=new float[3];
-        private readonly byte[][] gazeSources=new byte[3][];
-        private long previousGazeKey = -1;
+        private readonly int[] gazeFrames=new int[PetMotion.FrameCount];
+        private readonly float[] gazeWeights=new float[PetMotion.FrameCount];
+        private readonly byte[][] gazeSources=new byte[PetMotion.FrameCount][];
+        private readonly int[] previousGazeFrames=new int[PetMotion.FrameCount],previousGazeWeights=new int[PetMotion.FrameCount];
+        private int previousGazeCount=-1,previousBlinkStep=-1;
 
         private static readonly double[][] eyeCenters = {
             new double[]{141,169,193,169},
@@ -431,9 +484,15 @@ namespace FatFishPet
         internal static double EyeMask(int frame,int x,int y)
         {
             if(y<132||y>196||x<108||x>230)return 0;
-            var e=eyeCenters[frame==0?0:frame-15];
-            double a=Math.Sqrt(Math.Pow((x-e[0])/20,2)+Math.Pow((y-e[1])/16,2));
-            double b=Math.Sqrt(Math.Pow((x-e[2])/20,2)+Math.Pow((y-e[3])/16,2));
+            var e=eyeCenters[frame==0?0:frame>=34?0:frame-15];
+            double ex1=e[0],ey1=e[1],ex2=e[2],ey2=e[3];
+            if(frame>=34)
+            {
+                var target=eyeCenters[PetMotion.DirectionFrames[(frame-34)%8]-15];double amount=.5;
+                ex1+=(target[0]-ex1)*amount;ey1+=(target[1]-ey1)*amount;ex2+=(target[2]-ex2)*amount;ey2+=(target[3]-ey2)*amount;
+            }
+            double a=Math.Sqrt(Math.Pow((x-ex1)/20,2)+Math.Pow((y-ey1)/16,2));
+            double b=Math.Sqrt(Math.Pow((x-ex2)/20,2)+Math.Pow((y-ey2)/16,2));
             return Math.Max(0,Math.Min(1,(1-Math.Min(a,b))*5));
         }
 
@@ -441,15 +500,23 @@ namespace FatFishPet
         {
             int step=(int)Math.Round(blink*24);
             if(step<=0)return pixels[frame];
-            int closed=frame==0?2:frame+9;
+            int closed=frame==0?2:frame>=34?frame+8:frame+9;
 
             int key=frame*25+step;byte[] result;
             if(blinkCache.TryGetValue(key,out result))return result;
             result=new byte[mixPixels.Length];
-            if(step>=24)Array.Copy(pixels[closed],result,result.Length);
-            else warp.Render(frame,closed,step/24f,pixels[frame],pixels[closed],result);
+            byte[] original=pixels[frame],closedPixels=pixels[closed];
+            if(step>=24)Array.Copy(closedPixels,result,result.Length);
+            else
+            {
+                // Open/closed drawings are already registered.  Interpolate only their
+                // pixels here; the eye mask below prevents the closed pose from ever
+                // replacing the hair, face outline, body, tail, or silhouette alpha.
+                double amount=step/24.0;
+                for(int p=0;p<result.Length;p++)
+                    result[p]=(byte)Math.Round(original[p]*(1-amount)+closedPixels[p]*amount);
+            }
             // A blink changes eyelids only; never substitute the closed frame's head/body/alpha.
-            byte[] original=pixels[frame];
             for(int y=0;y<CanvasHeight;y++)for(int x=0;x<CanvasWidth;x++)
             {
                 int p=(y*CanvasWidth+x)*4;
@@ -468,23 +535,25 @@ namespace FatFishPet
         private BitmapSource CompositeGaze(PetPose current)
         {
             int n=0;
-            long key=(long)Math.Round(current.Blink*24);
-            for(int i=0;i<34;i++)if(current.Weights[i]>0.000001)
+            int blinkStep=(int)Math.Round(current.Blink*24);bool changed=blinkStep!=previousBlinkStep;
+            for(int i=0;i<PetMotion.FrameCount;i++)if(current.Weights[i]>0.000001)
             {
                 gazeFrames[n]=i;gazeWeights[n]=(float)current.Weights[i];
-                key=(key<<17)|((long)i<<11)|(long)Math.Round(current.Weights[i]*1024);n++;
+                if(previousGazeFrames[n]!=i||previousGazeWeights[n]!=(int)Math.Round(current.Weights[i]*1024))changed=true;
+                n++;
             }
-            if(key==previousGazeKey)return mixed;
+            if(!changed&&n==previousGazeCount)return mixed;
             for(int i=0;i<n;i++)gazeSources[i]=BlinkPixels(gazeFrames[i],current.Blink);
             if(n==1)Array.Copy(gazeSources[0],mixPixels,mixPixels.Length);
             else warp.RenderWeighted(gazeFrames,gazeWeights,gazeSources,n,mixPixels);
             mixed.WritePixels(new Int32Rect(0,0,CanvasWidth,CanvasHeight),mixPixels,CanvasWidth*4,0);
-            previousWasMix=false;previousGazeKey=key;return mixed;
+            for(int i=0;i<n;i++){previousGazeFrames[i]=gazeFrames[i];previousGazeWeights[i]=(int)Math.Round(gazeWeights[i]*1024);}
+            previousWasMix=false;previousGazeCount=n;previousBlinkStep=blinkStep;return mixed;
         }
 
         internal void DrawPose(DrawingContext dc, PetPose current)
         {
-            if(!current.Gaze)previousGazeKey=-1;
+            if(!current.Gaze)previousGazeCount=-1;
             BitmapSource image = current.Gaze ? CompositeGaze(current) : Composite(current.Weights);
             dc.PushTransform(new TranslateTransform(0, -27 * current.Lift));
             dc.PushTransform(new RotateTransform(current.Angle * 180 / Math.PI, SceneWidth / 2, 70));

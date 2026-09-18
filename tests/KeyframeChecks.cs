@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -23,13 +23,13 @@ internal static class AnimationChecks
         using(var view=new PetSpriteView())
         {
             var raw=(byte[][])typeof(PetSpriteView).GetField("pixels",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance).GetValue(view);
-            for(int i=0;i<34;i++)File.WriteAllBytes(Path.Combine(".build","motion-inputs",i.ToString("D2")+".bgra"),raw[i]);
+            for(int i=0;i<PetMotion.FrameCount;i++)File.WriteAllBytes(Path.Combine(".build","motion-inputs",i.ToString("D2")+".bgra"),raw[i]);
         }
     }
     private static bool Equal(byte[] a,byte[] b,int start){for(int i=start;i<a.Length;i++)if(a[i]!=b[i])return false;return true;}
     private static void Same(PetPose a, PetPose b, string label)
     {
-        double distance = 0; for (int i = 0; i < 34; i++) distance += Math.Abs(a.Weights[i] - b.Weights[i]);
+        double distance = 0; for (int i = 0; i < PetMotion.FrameCount; i++) distance += Math.Abs(a.Weights[i] - b.Weights[i]);
         Check(distance < .005 && Math.Abs(a.Lift-b.Lift)<.002 && Math.Abs(a.Angle-b.Angle)<.002 && Math.Abs(a.ScaleY-b.ScaleY)<.002, "Discontinuous transition: " + label);
     }
 
@@ -100,6 +100,16 @@ internal static class AnimationChecks
     private static void Run()
     {
         RateChecks();
+        SingleDrawingChecks();
+        foreach(var target in new[]{new[]{360.0,70.0,21.0},new[]{110.0,0.0,21.0},new[]{180.0,-220.0,18.0},new[]{-350.0,80.0,19.0}})
+        {
+            var settled=new PetMotion();PetPose p=settled.Evaluate(0);
+            for(int i=0;i<240;i++){double t=i/120.0;settled.SetGazeOffset(target[0],target[1],t);p=settled.Evaluate(t);}
+            Check(p.Weights[(int)target[2]]==1,"Stationary direction retained a ghosted mixture");
+        }
+        var boundary=new PetMotion();boundary.Evaluate(0);boundary.SetGazeOffset(350,0,0);
+        for(int i=0;i<240;i++){double angle=(i%2==0?21:24)*Math.PI/180;boundary.SetGazeOffset(350*Math.Cos(angle),350*Math.Sin(angle),i/120.0);boundary.Evaluate(i/120.0);}
+        Check(boundary.Evaluate(2).Weights[21]==1,"Direction boundary chatter");
         var selected=new List<PetPose>();var seen=new HashSet<int>();
         for(int dir=0;dir<9;dir++)
         {
@@ -144,10 +154,11 @@ internal static class AnimationChecks
         {
             var raw=(byte[][])typeof(PetSpriteView).GetField("pixels",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance).GetValue(view);
             Directory.CreateDirectory(Path.Combine(".build","motion-inputs"));
-            for(int i=0;i<34;i++)File.WriteAllBytes(Path.Combine(".build","motion-inputs",i.ToString("D2")+".bgra"),raw[i]);
-            foreach(int frame in new[]{18,21,24})for(int p=0;p<60*340*4;p++)Check(raw[frame][p]==raw[0][p],"Right turn flipped the ahoge");
+            for(int i=0;i<PetMotion.FrameCount;i++)File.WriteAllBytes(Path.Combine(".build","motion-inputs",i.ToString("D2")+".bgra"),raw[i]);
+
             var blinkMethod=typeof(PetSpriteView).GetMethod("BlinkPixels",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
-            foreach(int frame in new[]{0,16,17,18,19,21,22,23,24})foreach(double blink in new[]{.25,.5,.75,1.0})
+            var gazeFrames=new List<int>(new[]{0,16,17,18,19,21,22,23,24});for(int frame=34;frame<42;frame++)gazeFrames.Add(frame);
+            foreach(int frame in gazeFrames)foreach(double blink in new[]{.25,.5,.75,1.0})
             {
                 var bytes=(byte[])blinkMethod.Invoke(view,new object[]{frame,blink});
                 for(int y=0;y<360;y++)for(int x=0;x<340;x++)
@@ -215,6 +226,22 @@ internal static class AnimationChecks
             var tb=new RenderTargetBitmap(1360,1080,96,96,PixelFormats.Pbgra32);tb.Render(transitions);
             var te=new PngBitmapEncoder();te.Frames.Add(BitmapFrame.Create(tb));
             using(var f=File.Create("demo/animation-qa/native-v08-inbetweens.png"))te.Save(f);
+            var switches=new DrawingVisual();
+            using(var dc=switches.RenderOpen())
+            {
+                dc.DrawRectangle(Brushes.WhiteSmoke,null,new Rect(0,0,2720,1080));
+                double[] samples={0,.24,.26,.49,.51,.74,.76,1};
+                for(int row=0;row<3;row++)for(int col=0;col<samples.Length;col++)
+                {
+                    double radius=samples[col];var p=baseline;p.Gaze=true;
+                    double x=row==1?0:radius,y=row==0?0:row==1?-radius:radius;
+                    p.Weights=PetMotion.GazeWeights(x,y);
+                    dc.DrawImage(Render(view,p,300),new Rect(col*340,row*360,340,360));
+                }
+            }
+            var sb=new RenderTargetBitmap(2720,1080,96,96,PixelFormats.Pbgra32);sb.Render(switches);
+            var se=new PngBitmapEncoder();se.Frames.Add(BitmapFrame.Create(sb));
+            using(var f=File.Create("demo/animation-qa/v10-switch-audit.png"))se.Save(f);
             var eyes=new DrawingVisual();using(var dc=eyes.RenderOpen())
             {
                 dc.DrawRectangle(Brushes.WhiteSmoke,null,new Rect(0,0,1020,720));
@@ -226,5 +253,22 @@ internal static class AnimationChecks
         Console.WriteLine("PASS: "+count+" native WPF renders; real-keyframe 8-way pursuit, bounded speed/acceleration, idle timeout, blinking; no timed gaze loop; pickup/release/regrab continuity; 30%-200% alpha margins.");
             Console.WriteLine("Offscreen blended render mean: "+mean.ToString("F2",CultureInfo.InvariantCulture)+" ms/frame (includes bitmap readback, not measured display FPS).");
         }
+    }
+
+    private static void SingleDrawingChecks()
+    {
+        var renderer=new PetMotionWarp();var colors=new byte[3][];
+        for(int i=0;i<3;i++){colors[i]=new byte[340*360*4];for(int p=0;p<colors[i].Length;p+=4){colors[i][p+i]=255;colors[i][p+3]=255;}}
+        var output=new byte[340*360*4];
+        foreach(float t in new[]{0f,.05f,.25f,.49f,.5f,.51f,.75f,.95f,1f})
+        {
+            renderer.Render(0,21,t,colors[0],colors[1],output);int owner=t<=.5f?0:1;
+            for(int p=0;p<output.Length;p+=4)Check(output[p+owner]==255&&output[p+1-owner]==0&&output[p+2]==0&&output[p+3]==255,"Transition blended two source drawings");
+        }
+        renderer.RenderWeighted(new[]{0,21,18},new[]{.2f,.3f,.5f},colors,3,output);
+        for(int p=0;p<output.Length;p+=4)Check(output[p]==0&&output[p+1]==0&&output[p+2]==255&&output[p+3]==255,"Three-way transition mixed source ink");
+        renderer.RenderWeighted(new[]{0},new[]{1f},new[]{colors[0]},1,output);
+        Check(Equal(output,colors[0],0),"Single frame was altered");
+        Console.WriteLine("PASS: pair and three-way transitions have one source drawing; no inter-pose color/alpha crossfade.");
     }
 }

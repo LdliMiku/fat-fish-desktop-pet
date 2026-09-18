@@ -1,6 +1,13 @@
-/.build/
+/.build/*
+!/.build/prepare-v6.cjs
+!/.build/analyze-v6-motion.py
+!/.build/make-bridge-blink-source.cjs
 /data/
 /demo/
 *.log
 Thumbs.db
 Desktop.ini
+tests/*.exe
+/assets/animations/v6/near-*.png
+/assets/animations/v6/far-*.png
+/assets/animations/v6/up-*-source.png

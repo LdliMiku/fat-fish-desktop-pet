@@ -1,0 +1,36 @@
+{
+  "sheet": {
+    "width": 2172,
+    "height": 724,
+    "frames": [
+      {
+        "x": 190,
+        "y": 15,
+        "w": 535,
+        "h": 678,
+        "headX": 286.04506604506605,
+        "scaleHeight": 678,
+        "widthFactor": 1
+      },
+      {
+        "x": 820,
+        "y": 16,
+        "w": 534,
+        "h": 677,
+        "headX": 284.5997494519261,
+        "scaleHeight": 677,
+        "widthFactor": 1
+      },
+      {
+        "x": 1455,
+        "y": 23,
+        "w": 529,
+        "h": 670,
+        "headX": 281.1381759483454,
+        "scaleHeight": 670,
+        "widthFactor": 1
+      }
+    ],
+    "baseHeight": 678
+  }
+}

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Diagnostics;
@@ -18,12 +18,34 @@ using Forms = System.Windows.Forms;
 
 [assembly: AssemblyTitle("大肥鱼桌宠")]
 [assembly: AssemblyDescription("可以点击、拖动的透明桌面伙伴")]
-[assembly: AssemblyVersion("0.9.0.0")]
+[assembly: AssemblyVersion("0.1.0.0")]
 
 namespace FatFishPet
 {
     internal static class Program
     {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PowerState { public uint Version, ControlMask, StateMask; }
+        [DllImport("kernel32.dll",SetLastError=true)]
+        private static extern bool GetProcessInformation(IntPtr process,int kind,ref PowerState state,uint size);
+        [DllImport("kernel32.dll",SetLastError=true)]
+        private static extern bool SetProcessInformation(IntPtr process,int kind,ref PowerState state,uint size);
+        private static void ConfigureAnimationScheduling()
+        {
+            // A visible animated pet is latency-sensitive even when another window has focus.
+            // Keep normal process priority; explicitly opt out of execution-speed power throttling.
+            try
+            {
+                using(var process=Process.GetCurrentProcess())
+                {
+                    var state=new PowerState{Version=1};
+                    if(!GetProcessInformation(process.Handle,4,ref state,12))return;
+                    state.ControlMask|=1;state.StateMask&=~1u;
+                    SetProcessInformation(process.Handle,4,ref state,12);
+                }
+            }
+            catch(EntryPointNotFoundException) { } // Older Windows keeps its original scheduling.
+        }
         [STAThread]
         private static void Main(string[] args)
         {
@@ -33,6 +55,7 @@ namespace FatFishPet
                 if (!created) return;
                 try
                 {
+                    ConfigureAnimationScheduling();
                     var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
                     app.Run(new PetWindow(Array.IndexOf(args, "--animation-diagnostics") >= 0));
                 }
