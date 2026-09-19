@@ -76,7 +76,10 @@ namespace FatFishPet
         private const double MaximumPetHeight = 600;
         private readonly string settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "settings.txt");
         private readonly PetSpriteView pet;
-        private readonly ScaleTransform scale = new ScaleTransform(1, 1);
+        private readonly PetSizeMotion sizeMotion;
+        private readonly MatrixTransform sizeTransform = new MatrixTransform();
+        private TimeSpan lastSizeFrame = TimeSpan.MinValue;
+        private readonly ScaleTransform scale = new ScaleTransform(1, 1, 170, 340);
         private readonly Forms.NotifyIcon tray;
         private readonly DispatcherTimer sizeSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         private Window sizeWindow;
@@ -118,29 +121,41 @@ namespace FatFishPet
             WindowStartupLocation = WindowStartupLocation.Manual;
             UseLayoutRounding = true;
             ReadSettings();
+            sizeMotion = new PetSizeMotion(petHeight);
+            Width = PetSizeMotion.SurfaceWidth;
+            Height = PetSizeMotion.SurfaceHeight;
 
+            var transform = new TransformGroup();
+            transform.Children.Add(scale);
+            transform.Children.Add(sizeTransform);
             var iconSprite = PetSpriteView.LoadBitmap("PetSprite");
             Icon = BitmapFrame.Create(iconSprite);
             pet = new PetSpriteView
             {
                 DiagnosticPath = animationDiagnostics ? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "animation-performance.txt") : null,
-                Margin = new Thickness(8),
+                Width = PetSpriteView.SceneWidth,
+                Height = PetSpriteView.SceneHeight,
                 Cursor = Cursors.Hand,
-                RenderTransform = scale,
-                RenderTransformOrigin = new Point(0.5, PetSpriteView.Ground / PetSpriteView.SceneHeight)
+                RenderTransform = transform,
+                UseLayoutRounding = false
             };
             System.Windows.Automation.AutomationProperties.SetName(pet, "大肥鱼，按住左键拖动，右键打开菜单");
             System.Windows.Automation.AutomationProperties.SetHelpText(pet, "按住左键拖动 · 滚轮调节大小 · 右键打开菜单");
             RenderOptions.SetBitmapScalingMode(pet, BitmapScalingMode.HighQuality);
-            Content = pet;
+            var surface = new Canvas { Background = null, ClipToBounds = false };
+            surface.Children.Add(pet);
+            Content = surface;
             pet.CursorOffsetProvider = GetCursorOffset;
             pet.Rates=rates;
-            ApplySize();
-            if (!settingsUseAnimationLayout && IsFinite(savedLeft) && IsFinite(savedTop))
+            ApplyVisualSize();
+            if (IsFinite(savedLeft) && IsFinite(savedTop))
             {
-                double oldWidth = petHeight * iconSprite.PixelWidth / iconSprite.PixelHeight + 16;
-                savedLeft += (oldWidth - Width) / 2;
-                savedTop += petHeight + 8 - Height + FootInset;
+                // Persist layout-3 visible bounds, not the larger transparent surface.
+                double oldWidth = settingsUseAnimationLayout ? petHeight * PetSpriteView.SceneWidth / PetSpriteView.CharacterHeight + 16
+                    : petHeight * iconSprite.PixelWidth / iconSprite.PixelHeight + 16;
+                double oldGround = 8 + petHeight * (settingsUseAnimationLayout ? PetSpriteView.Ground / PetSpriteView.CharacterHeight : 1);
+                savedLeft += oldWidth / 2 - PetSizeMotion.AnchorX;
+                savedTop += oldGround - PetSizeMotion.AnchorY;
             }
             MouseLeftButtonDown += OnPetPressed;
             MouseMove += OnPetMoved;
@@ -184,11 +199,13 @@ namespace FatFishPet
                 else ResetPosition();
                 ResizePet(petHeight);
                 ready = true;
+                CompositionTarget.Rendering += OnSizeFrame;
                 SaveSettings();
             };
             Closed += delegate
             {
                 closing = true;
+                CompositionTarget.Rendering -= OnSizeFrame;
                 pet.Dispose();
                 sizeSaveTimer.Stop();
                 SaveSettings();
@@ -201,6 +218,7 @@ namespace FatFishPet
         private readonly Stopwatch cursorIdleClock = Stopwatch.StartNew();
         private NativePoint lastGazeCursor;
         private bool hasGazeCursor;
+        private Vector lastGazeOffset;
 
         private Vector? GetCursorOffset()
         {
@@ -213,9 +231,10 @@ namespace FatFishPet
                 lastGazeCursor = cursor;
                 cursorIdleClock.Restart();
             }
-            if (cursorIdleClock.Elapsed.TotalSeconds >= 5) return new Vector(0, 0);
+            if (sizeMotion.IsMoving) return lastGazeOffset;
+            if (cursorIdleClock.Elapsed.TotalSeconds >= 5) return lastGazeOffset = new Vector(0, 0);
             Point local = pet.PointFromScreen(new Point(cursor.X, cursor.Y));
-            return new Vector(local.X / pet.ActualWidth * PetSpriteView.SceneWidth - PetSpriteView.SceneWidth / 2,
+            return lastGazeOffset = new Vector(local.X / pet.ActualWidth * PetSpriteView.SceneWidth - PetSpriteView.SceneWidth / 2,
                 local.Y / pet.ActualHeight * PetSpriteView.SceneHeight - 170);
         }
 
@@ -224,6 +243,12 @@ namespace FatFishPet
             if (!ready || pointerPressed || e.ChangedButton != MouseButton.Left) return;
             if (!GetCursorPos(out pressCursor)) return;
             if (!CaptureMouse()) return;
+            if (sizeMotion.IsMoving)
+            {
+                petHeight = sizeMotion.Current;
+                sizeMotion.Snap(petHeight);
+                UpdateSizeControls();
+            }
             e.Handled = true;
             pointerPressed = true;
             dragging = false;
@@ -323,10 +348,11 @@ namespace FatFishPet
                 WindowStartupLocation=WindowStartupLocation.Manual,FontFamily=new FontFamily("Microsoft YaHei UI"),FontSize=13,
                 Background=Brushes.White,Content=new ScrollViewer{Content=content,VerticalScrollBarVisibility=ScrollBarVisibility.Auto}};
             window.Loaded+=delegate {
-                var area=GetWorkingArea();double left=Left-window.ActualWidth-18;
-                if(left<area.Left)left=Left+Width+18;
+                Rect visible=PetSizeMotion.Bounds(sizeMotion.Current);
+                var area=GetWorkingArea();double left=Left+visible.Left-window.ActualWidth-18;
+                if(left<area.Left)left=Left+visible.Right+18;
                 window.Left=Math.Max(area.Left,Math.Min(left,area.Right-window.ActualWidth));
-                window.Top=Math.Max(area.Top,Math.Min(Top,area.Bottom-window.ActualHeight));
+                window.Top=Math.Max(area.Top,Math.Min(Top+visible.Top,area.Bottom-window.ActualHeight));
             };
             window.KeyDown+=delegate(object sender,KeyEventArgs e){if(e.Key==Key.Escape){window.Close();e.Handled=true;}};
             return window;
@@ -381,11 +407,9 @@ namespace FatFishPet
         private void ResizePet(double height)
         {
             if (!IsFinite(height)) return;
-            double bottom = Top + Height - FootInset;
-            double center = Left + Width / 2;
             petHeight = Math.Max(MinimumPetHeight, Math.Min(GetMaximumPetHeight(), height));
-            ApplySize();
-            if (IsFinite(center) && IsFinite(bottom)) { Left = center - Width / 2; Top = bottom - Height + FootInset; }
+            if (!ready) { sizeMotion.Snap(petHeight); ApplyVisualSize(); }
+            else sizeMotion.SetTarget(petHeight);
             KeepOnScreen();
             UpdateSizeControls();
             if (ready) { sizeSaveTimer.Stop(); sizeSaveTimer.Start(); }
@@ -398,19 +422,31 @@ namespace FatFishPet
             sizeRow.SetValue(petHeight/DefaultPetHeight*100);
         }
 
-        private void ApplySize()
+        private void OnSizeFrame(object sender, EventArgs args)
         {
-            Height = petHeight * PetSpriteView.SceneHeight / PetSpriteView.CharacterHeight + 16;
-            Width = petHeight * PetSpriteView.SceneWidth / PetSpriteView.CharacterHeight + 16;
+            var frame = args as RenderingEventArgs;
+            if (frame == null || frame.RenderingTime == lastSizeFrame) return;
+            double delta = lastSizeFrame == TimeSpan.MinValue ? 1.0 / 60 : (frame.RenderingTime - lastSizeFrame).TotalSeconds;
+            lastSizeFrame = frame.RenderingTime;
+            if (!sizeMotion.IsMoving) return;
+            sizeMotion.Advance(delta);
+            ApplyVisualSize();
         }
 
-        private double FootInset { get { return 8 + petHeight * (PetSpriteView.SceneHeight - PetSpriteView.Ground) / PetSpriteView.CharacterHeight; } }
+        private void ApplyVisualSize()
+        {
+            double factor = sizeMotion.Current / PetSpriteView.CharacterHeight;
+            sizeTransform.Matrix = new Matrix(factor, 0, 0, factor,
+                PetSizeMotion.AnchorX - PetSpriteView.SceneWidth * factor / 2,
+                PetSizeMotion.AnchorY - PetSpriteView.Ground * factor);
+        }
 
         private void ResetPosition()
         {
             var area = SystemParameters.WorkArea;
-            Left = area.Right - Width - 28;
-            Top = area.Bottom - Height - 16;
+            Rect visible = PetSizeMotion.Bounds(Math.Max(petHeight, sizeMotion.Current));
+            Left = area.Right - visible.Right - 28;
+            Top = area.Bottom - visible.Bottom - 16;
             KeepOnScreen();
             Show();
             SaveSettings();
@@ -422,7 +458,8 @@ namespace FatFishPet
             if (source == null || source.CompositionTarget == null || !IsFinite(Left) || !IsFinite(Top)) return SystemParameters.WorkArea;
             var toPixels = source.CompositionTarget.TransformToDevice;
             var fromPixels = source.CompositionTarget.TransformFromDevice;
-            var center = toPixels.Transform(new Point(Left + Width / 2, Top + Height / 2));
+            Rect visible = PetSizeMotion.Bounds(sizeMotion.Current);
+            var center = toPixels.Transform(new Point(Left + visible.Left + visible.Width / 2, Top + visible.Top + visible.Height / 2));
             var screen = Forms.Screen.FromPoint(new System.Drawing.Point((int)center.X, (int)center.Y));
             var bounds = screen.WorkingArea;
             var topLeft = fromPixels.Transform(new Point(bounds.Left, bounds.Top));
@@ -433,8 +470,9 @@ namespace FatFishPet
         private void KeepOnScreen()
         {
             var area = GetWorkingArea();
-            Left = Math.Max(area.Left, Math.Min(Left, area.Right - Width));
-            Top = Math.Max(area.Top, Math.Min(Top, area.Bottom - Height));
+            Point position = PetSizeMotion.ClampPosition(new Point(Left, Top), area, Math.Max(petHeight, sizeMotion.Current));
+            Left = position.X;
+            Top = position.Y;
         }
 
         private static bool IsFinite(double value) { return !double.IsNaN(value) && !double.IsInfinity(value); }
@@ -471,10 +509,11 @@ namespace FatFishPet
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(settingsPath));
+                Rect visible = PetSizeMotion.Bounds(petHeight);
                 var lines = new List<string>
                 {
-                    "left=" + Left.ToString("R", CultureInfo.InvariantCulture),
-                    "top=" + Top.ToString("R", CultureInfo.InvariantCulture),
+                    "left=" + (Left + visible.Left).ToString("R", CultureInfo.InvariantCulture),
+                    "top=" + (Top + visible.Top).ToString("R", CultureInfo.InvariantCulture),
                     "height=" + petHeight.ToString("R", CultureInfo.InvariantCulture),
                     "topmost=" + (Topmost ? "1" : "0"),
                     "layout=3"
