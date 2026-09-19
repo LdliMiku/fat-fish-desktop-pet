@@ -10,6 +10,7 @@ foreach ($reference in $references) { $arguments += '/reference:' + (Join-Path $
 $resources = @{ 'unified-sheet.png' = 'UnifiedSprites'; 'atlas.json' = 'AnimationAtlas'; 'top-repairs.png' = 'HeadRepairs'; 'top-repairs.json' = 'HeadRepairAtlas' }
 foreach ($name in $resources.Keys) { $arguments += '/resource:' + (Join-Path $projectDir ('assets\animations\v6\' + $name)) + ',' + $resources[$name] }
 $arguments += Join-Path $projectDir 'src\PetAnimation.cs'
+$arguments += Join-Path $projectDir 'src\PetSizeMotion.cs'
 $arguments += Join-Path $projectDir 'src\PetMotionWarp.cs'
 $arguments += Join-Path $projectDir 'src\AnimationRates.cs'
 $arguments += Join-Path $projectDir 'src\NumericSettingRow.cs'
@@ -18,5 +19,9 @@ if (Test-Path -LiteralPath $motionField) { $arguments += '/resource:' + $motionF
 $arguments += Join-Path $PSScriptRoot 'KeyframeChecks.cs'
 & (Join-Path $frameworkDir 'csc.exe') @arguments
 if ($LASTEXITCODE -ne 0) { throw 'Animation checks compilation failed' }
-& $checkExe @args
-if ($LASTEXITCODE -ne 0) { throw 'Animation checks failed' }
+Push-Location $projectDir
+try {
+    New-Item -ItemType Directory -Force -Path 'demo/animation-qa','.build/motion-inputs' | Out-Null
+    & $checkExe @args
+    if ($LASTEXITCODE -ne 0) { throw 'Animation checks failed' }
+} finally { Pop-Location }

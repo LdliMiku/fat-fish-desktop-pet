@@ -17,6 +17,7 @@ foreach ($name in $animationAssets.Keys) {
     $compilerArgs += '/resource:' + $assetPath + ',' + $animationAssets[$name]
 }
 $compilerArgs += Join-Path $projectDir 'src\PetApp.cs'
+$compilerArgs += Join-Path $projectDir 'src\PetSizeMotion.cs'
 $compilerArgs += Join-Path $projectDir 'src\PetAnimation.cs'
 $compilerArgs += Join-Path $projectDir 'src\PetMotionWarp.cs'
 $compilerArgs += Join-Path $projectDir 'src\AnimationRates.cs'
