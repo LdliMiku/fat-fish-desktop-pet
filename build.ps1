@@ -10,6 +10,9 @@ if (-not (Test-Path -LiteralPath $sprite)) { throw '缺少 assets\pet-front.png�
 $references = @('System.dll', 'System.Core.dll', 'System.Drawing.dll', 'System.Windows.Forms.dll', 'System.Runtime.Serialization.dll', 'WPF\WindowsBase.dll', 'WPF\PresentationCore.dll', 'WPF\PresentationFramework.dll', 'System.Xaml.dll')
 $compilerArgs = @('/nologo', '/target:winexe', '/platform:anycpu', '/optimize+', '/codepage:65001', ('/out:' + $output), ('/win32manifest:' + (Join-Path $projectDir 'src\app.manifest')), ('/resource:' + $sprite + ',PetSprite'))
 foreach ($reference in $references) { $compilerArgs += '/reference:' + (Join-Path $frameworkDir $reference) }
+$heartAsset=Join-Path $projectDir 'assets\particles\pink-heart.png'
+if (-not (Test-Path -LiteralPath $heartAsset)) { throw '缺少爱心粒子素材。' }
+$compilerArgs += '/resource:' + $heartAsset + ',HeartParticle'
 $animationAssets = @{ 'unified-sheet.png' = 'UnifiedSprites'; 'atlas.json' = 'AnimationAtlas'; 'motion-fields.gz' = 'MotionFields'; 'top-repairs.png' = 'HeadRepairs'; 'top-repairs.json' = 'HeadRepairAtlas' }
 foreach ($name in $animationAssets.Keys) {
     $assetPath = Join-Path $projectDir ('assets\animations\v6\' + $name)
@@ -19,6 +22,7 @@ foreach ($name in $animationAssets.Keys) {
 $compilerArgs += Join-Path $projectDir 'src\PetApp.cs'
 $compilerArgs += Join-Path $projectDir 'src\PetSizeMotion.cs'
 $compilerArgs += Join-Path $projectDir 'src\PetAnimation.cs'
+$compilerArgs += Join-Path $projectDir 'src\PetParticles.cs'
 $compilerArgs += Join-Path $projectDir 'src\PetMotionWarp.cs'
 $compilerArgs += Join-Path $projectDir 'src\AnimationRates.cs'
 $compilerArgs += Join-Path $projectDir 'src\NumericSettingRow.cs'

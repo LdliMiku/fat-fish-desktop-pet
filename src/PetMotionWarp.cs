@@ -46,6 +46,16 @@ namespace FatFishPet
         {
             if(count<=0) { Array.Clear(output,0,output.Length);return; }
             int owner=0;for(int i=1;i<count;i++)if(weights[i]>weights[owner])owner=i;
+            // Tiny nuzzle: keep one complete center drawing as the ink source.
+            // Only its front head follows the neighboring physical pose's motion field.
+            bool nuzzle=true;int center=-1;
+            for(int i=0;i<count;i++)
+            {
+                if(indices[i]==55)center=i;
+                if(indices[i]!=54&&indices[i]!=55&&indices[i]!=56)nuzzle=false;
+            }
+            nuzzle=nuzzle&&center>=0;
+            if(nuzzle)owner=center;
             if(count==1) { Array.Copy(sources[owner],output,output.Length);return; }
             var flows=new float[count][];
             for(int j=0;j<count;j++)
@@ -61,6 +71,20 @@ namespace FatFishPet
             for(int y=Height*worker/workers;y<Height*(worker+1)/workers;y++)for(int x=0;x<Width;x++)
             {
                 int oi=(y*Width+x)*4;
+                    float headMask=1;
+                    if(nuzzle)
+                    {
+                        // Front hair/face only. Rear side locks, hands and torso stay exact.
+                        double nx=(x-170)/69.0,ny=(y-151)/61.0;
+                        double radius=Math.Sqrt(nx*nx+ny*ny);
+                        double edge=Math.Max(0,Math.Min(1,(1-radius)/.22));
+                        headMask=(float)(edge*edge*(3-2*edge));
+                        if(headMask==0)
+                        {
+                            for(int channel=0;channel<4;channel++)output[oi+channel]=source[oi+channel];
+                            continue;
+                        }
+                    }
                     float sx=x,sy=y;
                     // Invert the blended displacement at its source position instead of sampling
                     // forward flow at the destination, which misaligns large face turns.
@@ -75,7 +99,7 @@ namespace FatFishPet
                             dx+=((f[k]*(1-fx0)+f[k+2]*fx0)*(1-fy0)+(f[k+FieldWidth*2]*(1-fx0)+f[k+FieldWidth*2+2]*fx0)*fy0)*weights[j];
                             dy+=((f[k+1]*(1-fx0)+f[k+3]*fx0)*(1-fy0)+(f[k+FieldWidth*2+1]*(1-fx0)+f[k+FieldWidth*2+3]*fx0)*fy0)*weights[j];
                         }
-                        sx=x-dx;sy=y-dy;
+                        sx=x-dx*headMask;sy=y-dy*headMask;
                     }
                     sx=Math.Max(0,Math.Min(Width-1.001f,sx));sy=Math.Max(0,Math.Min(Height-1.001f,sy));
                     int xx=(int)sx,yy=(int)sy,a=(yy*Width+xx)*4;

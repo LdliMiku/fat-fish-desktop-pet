@@ -14,7 +14,7 @@ internal static class AnimationChecks
     [STAThread]
     private static void Main(string[] args)
     {
-        try { if(args.Length>0){Export();return;} Run(); }
+        try { if(args.Length>0){Export();return;} IdleLookChecks(); HeadPetChecks(); Run(); }
         catch (Exception error) { Console.WriteLine("FAIL: " + error.GetType().FullName + ": " + error.Message); Environment.ExitCode = 1; }
     }
 
@@ -76,7 +76,7 @@ internal static class AnimationChecks
         var savedRates=new AnimationRates();savedRates[AnimationKind.Turn]=2.35;savedRates[AnimationKind.Blink]=.25;savedRates[AnimationKind.Click]=5;
         var restored=new AnimationRates();
         foreach(string line in savedRates.ToLines()){var pair=line.Split('=');restored.Read(pair[0],double.Parse(pair[1],CultureInfo.InvariantCulture));}
-        for(int i=0;i<7;i++)Check(savedRates[(AnimationKind)i]==restored[(AnimationKind)i],"Rate persistence roundtrip failed");
+        for(int i=0;i<AnimationRates.Names.Length;i++)Check(savedRates[(AnimationKind)i]==restored[(AnimationKind)i],"Rate persistence roundtrip failed");
         double parsed;
         Check(NumericSettingRow.TryValue("1.75x",.25,5,out parsed)&&parsed==1.75,"Decimal speed input failed");
         Check(NumericSettingRow.TryValue("125.5%",30,200,out parsed)&&parsed==125.5,"Decimal size input failed");
@@ -87,7 +87,7 @@ internal static class AnimationChecks
         input.Text="NaN";Check(!row.Commit()&&row.Value==2.35,"Invalid input changed live value");
         var uiPanel=new System.Windows.Controls.StackPanel{Margin=new Thickness(22)};
         uiPanel.Children.Add(new System.Windows.Controls.TextBlock{Text="动画播放倍率",FontSize=22,Margin=new Thickness(0,0,0,16)});
-        foreach(string name in new[]{"转头跟随","眨眼动作","待机呼吸","拎起过渡","落地过渡","悬空晃动","点击反馈"})uiPanel.Children.Add(new NumericSettingRow(name,"倍",.25,5,1));
+        foreach(string name in AnimationRates.Names)uiPanel.Children.Add(new NumericSettingRow(name,"倍",.25,5,1));
         uiPanel.Children.Add(new NumericSettingRow("桌宠大小（输入示例）","%",30,200,125.5));
         var ui=new System.Windows.Controls.Border{Background=Brushes.White,Child=uiPanel};
         ui.Measure(new Size(450,double.PositiveInfinity));ui.Arrange(new Rect(0,0,450,ui.DesiredSize.Height));ui.UpdateLayout();
@@ -101,7 +101,6 @@ internal static class AnimationChecks
     {
         RateChecks();
         SingleDrawingChecks();
-        SizeChecks();
         foreach(var target in new[]{new[]{360.0,70.0,21.0},new[]{110.0,0.0,21.0},new[]{180.0,-220.0,18.0},new[]{-350.0,80.0,19.0}})
         {
             var settled=new PetMotion();PetPose p=settled.Evaluate(0);
@@ -256,36 +255,119 @@ internal static class AnimationChecks
         }
     }
 
-    private static void SizeChecks()
+    private static double TriggerPet(PetMotion motion,double start)
     {
-        foreach(double hz in new[]{30.0,60.0,144.0})
+        for(int i=0;i<180;i++)
         {
-            var motion=new PetSizeMotion(90);motion.SetTarget(600);
-            double previous=motion.Current;
-            for(int i=0;i<(int)hz;i++)
+            double t=start+i/120.0;
+            motion.SampleHeadPointer(170+30*Math.Sin(i/120.0*Math.PI*6),100,t,true);
+            motion.Evaluate(t);
+            if(motion.Petting)return t;
+        }
+        throw new Exception("Head gesture failed to trigger");
+    }
+    private static void HeadPetChecks()
+    {
+        foreach(int mode in new[]{0,1,2,3})
+        {
+            var gesture=new HeadPetGesture();
+            for(int i=0;i<240;i++)
             {
-                motion.Advance(1/hz);
-                Check(motion.Current>=previous&&motion.Current<=600,"Resize overshot or reversed");
-                previous=motion.Current;
+                double x=mode==0?170:mode==1?130+i*.3:170+30*Math.Sin(i*.1);
+                Check(!gesture.Sample(x,mode==2?240:100,i/120.0,mode!=3),"False head gesture");
             }
-            Check(motion.Current==600&&!motion.IsMoving,"Resize failed to settle");
-            motion.SetTarget(90);double before=motion.Current;
-            motion.SetTarget(400);Check(motion.Current==before,"New target snapped visible size");
-            motion.Advance(1/hz);Check(motion.Current<before&&motion.Current>400,"Resize reversal jumped");
         }
-        var stalled=new PetSizeMotion(90);stalled.SetTarget(600);stalled.Advance(2);
-        Check(stalled.Current<400,"Delayed frame jumped to target");
-        foreach(var area in new[]{new Rect(0,0,1920,1040),new Rect(-1920,-200,1920,1080),new Rect(0,0,800,600)})
-        foreach(double height in new[]{90.0,300.0,480.0})
-        foreach(var input in new[]{new Point(-3000,-2000),new Point(3000,2000),new Point(300,200)})
+        var sheet=new DrawingVisual();
+        using(var view=new PetSpriteView())
+        using(var dc=sheet.RenderOpen())
         {
-            var bounds=PetSizeMotion.Bounds(height);var point=PetSizeMotion.ClampPosition(input,area,height);
-            bounds.Offset(point.X,point.Y);Check(area.Contains(bounds),"Visible pet cannot reach or fit screen edge");
-            var relative=PetSizeMotion.Bounds(height);
-            double footX=relative.Left+relative.Width/2,footY=relative.Top+8+340*height/300;
-            Check(Math.Abs(footX-PetSizeMotion.AnchorX)<1e-8&&Math.Abs(footY-PetSizeMotion.AnchorY)<1e-8,"Resize anchor moved");
+            int column=0;
+            foreach(double rate in new[]{.25,1.0,5.0})
+            {
+                var m=new PetMotion();m.Idle.Enabled=false;m.Rates[AnimationKind.HeadPet]=rate;
+                m.Rates[AnimationKind.Turn]=5;m.Rates[AnimationKind.Blink]=.25;
+                double start=TriggerPet(m,0);bool closed=false,nodded=false;
+                for(int i=1;i<=Math.Ceiling(2.5/rate*240);i++)
+                {
+                    double t=start+i/240.0;var p=m.Evaluate(t);Valid(p);
+                    closed|=p.Blink>.99;nodded|=p.LookY>.45;
+                    if(rate==1&&i%120==0&&column<5)
+                    {dc.DrawImage(Render(view,p,300),new Rect(column++*340,0,340,360));}
+                }
+                Check(closed&&nodded&&!m.Petting,"Petting pose/duration/rate failed");
+                double end=start+2.5/rate;
+                for(int i=0;i<120;i++){double t=end+i/120.0;m.SampleHeadPointer(170+30*Math.Sin(i*.16),100,t,true);m.Evaluate(t);Check(!m.Petting,"Petting cooldown failed");}
+            }
         }
-        Console.WriteLine("PASS: resize smoothing at 30/60/144 Hz, retarget/reverse/stall, foot anchor and multi-monitor bounds.");
+        var rendered=new RenderTargetBitmap(1700,360,96,96,PixelFormats.Pbgra32);rendered.Render(sheet);
+        var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(rendered));
+        using(var output=File.Create("demo/animation-qa/head-pet-sequence.png"))encoder.Save(output);
+        foreach(bool lift in new[]{false,true})
+        {
+            var m=new PetMotion();double t=TriggerPet(m,0)+.5;
+            for(double k=t-.5;k<t;k+=.01)m.Evaluate(k);
+            var before=m.Evaluate(t);
+            if(lift)m.BeginLift(t);else m.InteractionBlocked=true;
+            var after=m.Evaluate(t);Same(before,after,"Petting interruption");
+            Check(Math.Abs(before.Blink-after.Blink)<.001&&!m.Petting,"Petting interrupt blink jump");
+        }
+        var rates=new AnimationRates();rates[AnimationKind.IdleLook]=2.35;rates[AnimationKind.HeadPet]=.65;
+        var restored=new AnimationRates();foreach(string line in rates.ToLines()){var pair=line.Split('=');restored.Read(pair[0],double.Parse(pair[1],CultureInfo.InvariantCulture));}
+        Check(restored[AnimationKind.IdleLook]==2.35&&restored[AnimationKind.HeadPet]==.65&&restored[AnimationKind.Turn]==1,"Independent rates persistence failed");
+        Check(AnimationRates.Names.Length==Enum.GetValues(typeof(AnimationKind)).Length,"Rate UI missing action");
+        Console.WriteLine("PASS: head gesture rejection, response, independent rates, cooldown, interruption and persistence");
+    }
+
+    private static void IdleLookChecks()
+    {
+        foreach(double rate in new[]{.25,1.0,5.0})
+        {
+            var m=new PetMotion { Idle=new IdleLook(new Random(17)) };
+            m.Rates[AnimationKind.IdleLook]=rate;
+            bool previous=false;int cycles=0,first=0;double start=0,end=0;bool left=false,right=false;
+            for(int i=0;i<36000;i++)
+            {
+                double t=i/120.0;m.SetGazeOffset(0,0,t);var p=m.Evaluate(t);Valid(p);
+                if(m.Idle.Active&&!previous)
+                {
+                    Check(t-end>=39.9,"Idle cooldown too short");start=t;
+                    int direction=Math.Sign(p.LookX);Check(cycles==0||direction==-first,"Idle repeated first direction");first=direction;
+                    cycles++;left=right=false;
+                }
+                if(m.Idle.Active){left|=p.LookX<-.9;right|=p.LookX>.9;}
+                if(!m.Idle.Active&&previous)
+                {
+                    Check(left&&right,"Idle did not visit both full poses");
+                    Check(Math.Abs(p.LookX)<.003,"Idle ended before neutral");
+                    Check((t-start)*rate>=3.9&&(t-start)*rate<5,"Idle speed multiplier failed");end=t;
+                }
+                previous=m.Idle.Active;
+            }
+            Check(cycles>=3,"Idle never repeated");
+        }
+        foreach(string interruption in new[]{"mouse","click","menu","disable","lift"})
+        {
+            var m=new PetMotion { Idle=new IdleLook(new Random(17)) };double t=0;PetPose before=m.Evaluate(0);
+            for(;t<80;t+=.01){m.SetGazeOffset(0,0,t);before=m.Evaluate(t);if(m.Idle.Active&&Math.Abs(before.LookX)>.7)break;}
+            Check(m.Idle.Active,"No active idle to interrupt");
+            if(interruption=="mouse")m.SetGazeOffset(400,0,t);
+            if(interruption=="click")m.Idle.Interrupt(t);
+            if(interruption=="menu")m.InteractionBlocked=true;
+            if(interruption=="disable")m.Idle.Enabled=false;
+            if(interruption=="lift")m.BeginLift(t);
+            var after=m.Evaluate(t);Check(!m.Idle.Active,"Idle did not cancel: "+interruption);
+            Same(before,after,"Idle interruption "+interruption);
+            for(int i=1;i<1500;i++){m.SetGazeOffset(0,0,t+i*.01);m.Evaluate(t+i*.01);Check(!m.Idle.Active,"Idle resumed too soon");}
+        }
+        var settings=new IdleLook();Check(settings.Enabled&&settings.Frequency==1,"Old settings defaults failed");
+        settings.Read("idleLookEnabled",0);settings.Read("idleLookFrequency",2);
+        var loaded=new IdleLook();foreach(string line in settings.ToLines()){var pair=line.Split('=');loaded.Read(pair[0],double.Parse(pair[1],CultureInfo.InvariantCulture));}
+        Check(!loaded.Enabled&&loaded.Frequency==2,"Idle settings roundtrip failed");
+        var sparse=new IdleLook(new Random(7)){Frequency=0};var frequent=new IdleLook(new Random(7)){Frequency=2};
+        sparse.Interrupt(0);frequent.Interrupt(0);double sparseAt=0,frequentAt=0;
+        for(int i=0;i<12000;i++){double t=i*.01;sparse.Update(t,.01,1,false,true);frequent.Update(t,.01,1,false,true);if(sparse.Active&&sparseAt==0)sparseAt=t;if(frequent.Active&&frequentAt==0)frequentAt=t;}
+        Check(frequentAt>=30&&frequentAt<=42.5&&sparseAt>=60&&sparseAt<=110,"Frequency windows failed");
+        Console.WriteLine("PASS: autonomous look timing, full poses, alternation, rates, interruptions, settings and frequency");
     }
 
     private static void SingleDrawingChecks()

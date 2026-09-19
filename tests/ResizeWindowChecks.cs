@@ -14,6 +14,7 @@ internal static class ResizeWindowChecks
         Window window=null;
         try
         {
+            ResizeMotionChecks.Run();
             var assembly=Assembly.LoadFrom(args[0]);
             var type=assembly.GetType("FatFishPet.PetWindow",true);
             window=(Window)Activator.CreateInstance(type,new object[]{false});
@@ -55,6 +56,13 @@ internal static class ResizeWindowChecks
             return 0;
         }
         catch(Exception error){Console.WriteLine("FAIL: "+error);return 1;}
-        finally{if(window!=null)window.Close();}
+        finally
+        {
+            if(window!=null)
+            {
+                window.GetType().GetField("ready",Fields).SetValue(window,false);
+                window.Close();
+            }
+        }
     }
 }

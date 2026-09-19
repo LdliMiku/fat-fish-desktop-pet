@@ -13,7 +13,7 @@ async function readSheet(file,expected=9){
  if(count>4000)parts.push({minX,maxX,minY,maxY,count});}
  if(parts.length!==expected)throw Error(file+' unexpected component count '+parts.length);
  parts.sort((a,b)=>(a.minY+a.maxY)-(b.minY+b.maxY));let ordered=[];
- if(expected===3)ordered=parts.sort((a,b)=>a.minX-b.minX);else for(let r=0;r<3;r++)ordered.push(...parts.slice(r*3,r*3+3).sort((a,b)=>a.minX-b.minX));
+ if(expected===3||expected===5)ordered=parts.sort((a,b)=>a.minX-b.minX);else for(let r=0;r<3;r++)ordered.push(...parts.slice(r*3,r*3+3).sort((a,b)=>a.minX-b.minX));
  const frames=ordered.map(b=>{
  const x=Math.max(0,b.minX-2),y=Math.max(0,b.minY-2),right=Math.min(w,b.maxX+3),bottom=Math.min(h,b.maxY+3),bh=b.maxY-b.minY+1;
  let sum=0,n=0;for(let yy=Math.floor(b.minY+bh*.93);yy<=b.maxY;yy++)for(let xx=b.minX;xx<=b.maxX;xx++)if(data[(yy*w+xx)*4+3]>200){sum+=xx;n++;}
@@ -31,6 +31,9 @@ async function readSheet(file,expected=9){
  for(const id of [16,17,18,19,21,22,23,24]){
   const file=dir+'/bridges/'+id+'.png',bank=await readSheet(file,3),neutral=bank.frames[0];
   const factor=(old.sheet.frames[0].w/old.sheet.baseHeight)/(neutral.w/neutral.h);
+  // Use the full drawing from the SAME bridge as its half pose. Both retain
+  // that bridge's neutral height and width calibration, never a regenerated strip.
+  if(id>=16&&id<=18)sources[id]={file,frame:{...bank.frames[2],scaleHeight:neutral.h,widthFactor:factor}};
   sources.push({file,frame:{...bank.frames[1],scaleHeight:neutral.h,widthFactor:factor}});
  }
  const closeFile=dir+'/bridge-blinks.png';
@@ -40,6 +43,17 @@ async function readSheet(file,expected=9){
   sources[2]={file:closeFile,frame:{...neutral,scaleHeight:neutral.h,widthFactor:factor}};
   for(const i of [0,1,2,3,5,6,7,8])sources.push({file:closeFile,frame:{...bank.frames[i],scaleHeight:neutral.h,widthFactor:factor}});
  }else{if(!process.argv.includes('--open-preview'))throw Error('Closed bridge poses missing');for(let i=34;i<42;i++)sources.push(sources[i]);}
+ // One complete bank: calibration neutral, two hands-up entry drawings,
+ // left full/half, bowed center, right half/full, hands-down recovery (50-58).
+ // Use ONE neutral scale for every pose; never normalize a bowed/turned
+ // drawing's shorter height or wider hair into an enlarged body.
+ // Head-pet drawings actually used by the build. This file is the user's
+ // hand-editable master: it started as the tone-matched copy of
+ // head-pet-original-tone-sheet.png and may be edited directly. Do not run
+ // .build/prepare-head-pet-tone.cjs after manual edits, it would overwrite it.
+ const petFile=dir+'/head-pet-manual-sheet.png',petBank=await readSheet(petFile,9),petNeutral=petBank.frames[0];
+ // Reference already includes the original width correction; do not apply it twice.
+ for(const frame of petBank.frames)sources.push({file:petFile,frame:{...frame,scaleHeight:petNeutral.h,widthFactor:1}});
  const cw=Math.max(...sources.map(s=>s.frame.w))+8,ch=Math.max(...sources.map(s=>s.frame.h))+8;
  const layers=[],frames=[];
  for(let i=0;i<sources.length;i++){

@@ -33,9 +33,12 @@ for ix in range(-24,25):
 PAIRS += [(0,a) for a in GAZE if a]
 PAIRS += [(a,2 if a==0 else a+8 if a>=34 else a+9) for a in GAZE]
 PAIRS += [(a,b) for a in GAZE if a for b in [9,12,14] if a!=b]
+PET = list(range(50,59))
+PAIRS += [(a,0) for a in PET]  # normal return, interruptions and pickup
+PAIRS += [(51,52),(52,55),(53,54),(54,55),(55,56),(56,57),(55,58)]
 PAIRS = sorted(set(tuple(sorted(pair)) for pair in PAIRS))
 frames = []
-for index in range(50):
+for index in range(59):
     raw = np.fromfile(ROOT / '.build' / 'motion-inputs' / f'{index:02}.bgra', dtype=np.uint8).reshape(H,W,4)
     gray = cv2.cvtColor(raw, cv2.COLOR_BGRA2GRAY)
     frames.append(np.clip(gray.astype(np.float32) * .82 + raw[:,:,3] * .18, 0, 255).astype(np.uint8))

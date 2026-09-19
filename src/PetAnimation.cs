@@ -51,11 +51,113 @@ namespace FatFishPet
 
     internal enum PetMotionState { Idle, PickingUp, Lifted, Landing }
 
+    internal sealed class IdleLook
+    {
+        private readonly Random random;
+        public bool Enabled = true;
+        public int Frequency = 1;
+        private double next = double.NaN, progress;
+        private int direction;
+        public bool Active { get; private set; }
+        public IdleLook() : this(new Random()) { }
+        internal IdleLook(Random source) { random = source; direction = random.Next(2) == 0 ? -1 : 1; }
+        public void Interrupt(double now)
+        {
+            Active = false; progress = 0;
+            double factor = Frequency == 0 ? 2 : Frequency == 2 ? .5 : 1;
+            next = now + 20 + (20 + random.NextDouble() * 25) * factor;
+        }
+        public double Update(double now, double delta, double rate, bool blocked, bool neutral)
+        {
+            if (!Enabled || blocked || delta > 1) { Interrupt(now); return 0; }
+            if (double.IsNaN(next)) Interrupt(now);
+            if (!Active && now >= next && neutral) { Active = true; progress = 0; direction = -direction; }
+            if (!Active) return 0;
+            progress += Math.Min(.05, Math.Max(0, delta)) * rate;
+            if (progress < 1.2) return direction;
+            if (progress < 2.8) return -direction;
+            if (progress >= 4 && neutral) Interrupt(now);
+            return 0;
+        }
+        public bool Read(string key, double value)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value)) return false;
+            if (key == "idleLookEnabled") { Enabled = value != 0; return true; }
+            if (key == "idleLookFrequency") { Frequency = Math.Max(0, Math.Min(2, (int)value)); return true; }
+            return false;
+        }
+        public string[] ToLines() { return new[] { "idleLookEnabled=" + (Enabled ? "1" : "0"), "idleLookFrequency=" + Frequency }; }
+    }
+
+    internal sealed class HeadPetGesture
+    {
+        private double started, lastTime, anchor, distance;
+        private int direction, reversals;
+        private bool tracking;
+        public void Reset() { tracking=false; direction=reversals=0; distance=0; }
+        public bool Sample(double x,double y,double now,bool allowed)
+        {
+            double nx=(x-170)/68,ny=(y-102)/38;
+            if(!allowed || double.IsNaN(nx) || double.IsNaN(ny) || nx*nx+ny*ny>1) { Reset(); return false; }
+            if(!tracking || now-lastTime>.2 || now-started>1.8)
+            { Reset(); tracking=true; started=lastTime=now; anchor=x; return false; }
+            lastTime=now;
+            double dx=x-anchor;
+            if(Math.Abs(dx)<12)return false;
+            int sign=Math.Sign(dx);
+            if(direction!=0&&sign!=direction)reversals++;
+            direction=sign;distance+=Math.Abs(dx);anchor=x;
+            if(now-started>=.45&&distance>=80&&reversals>=2){Reset();return true;}
+            return false;
+        }
+    }
+
     internal sealed class PetMotion
     {
-        internal const int FrameCount=50;
+        internal const int FrameCount=59;
+        private const double HeadPetStopGrace=.65;
         internal static readonly int[] DirectionFrames={16,17,18,19,21,22,23,24};
         public AnimationRates Rates = new AnimationRates();
+        public IdleLook Idle = new IdleLook();
+        public bool InteractionBlocked;
+        public readonly HeadPetGesture HeadGesture = new HeadPetGesture();
+        private double petProgress, petRecoveryProgress, petCooldown;
+        private bool petActive, petRecovering,petSoftExit;
+        private double petLastStroke,petPointerX,petPointerTime;
+        private bool petPointerTracked;
+        private double gazeResumeAt, gazeResumeProgress;
+        private bool petGazeHandoff;
+        private double[] petEntry, petRecoverySource;
+        public bool Petting { get { return petActive; } }
+        public bool EmitHearts { get { return petActive && petProgress>=.38 && !InteractionBlocked; } }
+        public void SampleHeadPointer(double x,double y,double now,bool allowed)
+        {
+            if(petActive)
+            {
+                // Entry recognition and ongoing strokes are separate: do not replay entry,
+                // or apply the next-gesture cooldown to an already active interaction.
+                double nx=(x-170)/68,ny=(y-102)/38;
+                bool valid=allowed&&!InteractionBlocked&&State==PetMotionState.Idle
+                    &&!double.IsNaN(nx)&&!double.IsNaN(ny)&&nx*nx+ny*ny<=1;
+                if(!valid){petPointerTracked=false;return;}
+                if(!petPointerTracked||now-petPointerTime>.2)
+                {
+                    petPointerTracked=true;petPointerX=x;petPointerTime=now;return;
+                }
+                petPointerTime=now;
+                // Accumulate small horizontal moves, but do not renew on a stationary cursor.
+                if(Math.Abs(x-petPointerX)>=4){petLastStroke=now;petPointerX=x;}
+                return;
+            }
+            if(HeadGesture.Sample(x,y,now,allowed && !InteractionBlocked && State==PetMotionState.Idle && !petActive && !petRecovering && now>=petCooldown))
+            {
+                petEntry=GazeWeights(lookX,lookY);
+                // Pointer coordinates recognize the gesture only; the clip has one fixed path.
+                targetX=targetY=0;gazeSector=-1;petGazeHandoff=false;
+                petActive=true;petProgress=0;petLastStroke=petPointerTime=now;
+                petPointerX=x;petPointerTracked=true;Idle.Interrupt(now);
+            }
+        }
         private double actionClock, breathClock, swayClock, blinkClock, lastClock;
         private double targetX, targetY, lookX, lookY, lookVX, lookVY, lastGazeTime;
         private double lastMouseX, lastMouseY, lastMouseMove;
@@ -77,7 +179,11 @@ namespace FatFishPet
             if (!mouseSeen || Math.Abs(x - lastMouseX) > .01 || Math.Abs(y - lastMouseY) > .01)
             {
                 mouseSeen = true; lastMouseX = x; lastMouseY = y; lastMouseMove = now;
+                Idle.Interrupt(now);
             }
+            // Do not queue a side-looking target behind the petting clip or its neutral hold.
+            if(petActive || petRecovering || (petGazeHandoff && now<gazeResumeAt))
+            {gazeSector=-1;targetX=targetY=0;return;}
             double radius = Math.Sqrt(x*x+y*y);
             if(now-lastMouseMove>=5||radius<(gazeSector<0?95:65))
             {gazeSector=-1;targetX=targetY=0;return;}
@@ -97,6 +203,8 @@ namespace FatFishPet
         public void BeginLift(double now)
         {
             transitionSource = Evaluate(now);
+            petActive=false;petPointerTracked=false;petRecovering=false;petGazeHandoff=false;petCooldown=now+2;HeadGesture.Reset();
+            Idle.Interrupt(now);
             pickupDuration = transitionSource.Lift > .1 ? .18 : .44;
             State = PetMotionState.PickingUp;
             stateStarted = actionClock;
@@ -120,6 +228,39 @@ namespace FatFishPet
         public PetPose Evaluate(double now)
         {
             double delta=Math.Max(0,now-lastClock);lastClock=now;
+            if (InteractionBlocked || State!=PetMotionState.Idle || delta>1)
+            {
+                if(petActive)
+                {
+                    petRecoverySource=HeadPetPose();petRecoveryProgress=0;petSoftExit=false;
+                    petRecovering=State==PetMotionState.Idle;
+                    petActive=false;petPointerTracked=false;petCooldown=now+2;
+                }
+                HeadGesture.Reset();
+            }
+            else if(petActive)
+            {
+                petProgress=Math.Min(.80,petProgress+Math.Min(.05,delta)*Rates[AnimationKind.HeadPet]);
+                if(petProgress>=.80&&now-petLastStroke>HeadPetStopGrace)
+                {
+                    // Reverse the existing physical entry poses for a gentle hands-down exit.
+                    petRecoverySource=HeadPetPose();petRecoveryProgress=0;
+                    petRecovering=true;petSoftExit=true;
+                    petActive=false;petPointerTracked=false;petCooldown=now+2;
+                    HeadGesture.Reset();
+                }
+            }
+            if(petRecovering)
+            {
+                petRecoveryProgress+=Math.Min(.05,delta)*Rates[AnimationKind.HeadPet];
+                if(petRecoveryProgress>=(petSoftExit?.65:.28)){petRecovering=false;ReleasePetGaze(now);}
+            }
+            if(petActive || petRecovering)
+            {
+                Idle.Interrupt(now);
+                blinkStarted=-10;nextBlink=now+3;
+            }
+            if (State != PetMotionState.Idle) Idle.Interrupt(now);
             actionClock+=delta*(State==PetMotionState.PickingUp?Rates[AnimationKind.Pickup]:State==PetMotionState.Landing?Rates[AnimationKind.Landing]:1);
             breathClock+=delta*Rates[AnimationKind.Breath];swayClock+=delta*Rates[AnimationKind.Sway];blinkClock+=delta*Rates[AnimationKind.Blink];
             if(now>=nextBlink){blinkStarted=blinkClock;nextBlink=now+3+blinkRandom.NextDouble()*2;}
@@ -191,23 +332,77 @@ namespace FatFishPet
                 Gaze = State == PetMotionState.Idle || (State == PetMotionState.PickingUp && transitionSource.Gaze && elapsed < .08),
                 LookX = State == PetMotionState.Idle ? lookX : State == PetMotionState.PickingUp ? transitionSource.LookX*(1-Ease(elapsed/.30)) : 0,
                 LookY = State == PetMotionState.Idle ? lookY : State == PetMotionState.PickingUp ? transitionSource.LookY*(1-Ease(elapsed/.30)) : 0,
-                Blink = State == PetMotionState.PickingUp ? transitionSource.Blink*(1-Ease(elapsed/.08)) : blinkAmount
+                Blink = State == PetMotionState.PickingUp ? transitionSource.Blink*(1-Ease(elapsed/.08)) : petActive || petRecovering ? 0 : blinkAmount
             };
         }
 
         private double[] IdlePose(double time, double now)
         {
+            // The nuzzle owns complete dedicated drawings, including its happy eyes.
+            // Keep the normal gaze clock current so following resumes gently from neutral.
+            if(petActive || petRecovering)
+            {
+                gazeClockStarted=true;lastGazeTime=now;
+                lookX=lookY=lookVX=lookVY=0;
+                return petActive?HeadPetPose():HeadPetExitPose();
+            }
+            if(petGazeHandoff && now<gazeResumeAt)
+            {
+                gazeClockStarted=true;lastGazeTime=now;Idle.Interrupt(now);
+                return Single(0);
+            }
+            double idleTarget = Idle.Update(now, gazeClockStarted ? now-lastGazeTime : 0, Rates[AnimationKind.IdleLook],
+                InteractionBlocked || petGazeHandoff || now-lastMouseMove < 5 || targetX != 0 || targetY != 0,
+                Math.Abs(lookX) < .002 && Math.Abs(lookY) < .002 && Math.Abs(lookVX) < .02 && Math.Abs(lookVY) < .02);
+            double desiredX = Idle.Active ? idleTarget : targetX;
+            double desiredY=targetY;
             double dt = gazeClockStarted ? Math.Max(0,Math.Min(.05,now-lastGazeTime)) : 0;
             gazeClockStarted=true;lastGazeTime=now;
             // Scale animation time, not the 5-second real cursor inactivity timeout.
-            dt*=Rates[AnimationKind.Turn];
+            dt*=Rates[Idle.Active ? AnimationKind.IdleLook : AnimationKind.Turn];
+            if(petGazeHandoff)
+            {
+                gazeResumeProgress+=dt;
+                double amount=Ease(gazeResumeProgress/.4);
+                desiredX*=amount;desiredY*=amount;
+                if(gazeResumeProgress>=.4)petGazeHandoff=false;
+            }
             while(dt>0)
             {
                 double h=Math.Min(dt,1.0/120);dt-=h;
-                Follow(ref lookX,ref lookVX,targetX,h);
-                Follow(ref lookY,ref lookVY,targetY,h);
+                Follow(ref lookX,ref lookVX,desiredX,h);
+                Follow(ref lookY,ref lookVY,desiredY,h);
             }
             return GazeWeights(lookX,lookY);
+        }
+
+        private void ReleasePetGaze(double now)
+        {
+            lookX=lookY=lookVX=lookVY=targetX=targetY=0;
+            gazeSector=-1;lastGazeTime=now;gazeClockStarted=true;
+            gazeResumeAt=now+.18;gazeResumeProgress=0;petGazeHandoff=true;
+            HeadGesture.Reset();
+        }
+
+        private double[] HeadPetExitPose()
+        {
+            if(!petSoftExit)return Mix(petRecoverySource,Single(0),Ease(petRecoveryProgress/.28));
+            // Same complete drawings/flow pairs as entry; no full-image alpha crossfade.
+            double t=petRecoveryProgress;
+            if(t<.20)return Between(55,52,Ease(t/.20));
+            if(t<.42)return Between(52,51,Ease((t-.20)/.22));
+            return Between(51,0,Ease((t-.42)/.23));
+        }
+
+        private double[] HeadPetPose()
+        {
+            double t=petProgress;
+            if(t<.15)return Mix(petEntry,Single(0),Ease(t/.15));
+            if(t<.38)return Between(0,51,Ease((t-.15)/.23));
+            if(t<.62)return Between(51,52,Ease((t-.38)/.24));
+            if(t<.80)return Between(52,55,Ease((t-.62)/.18));
+            // Stay on the chest-hands drawing until real-time stroke activity ends.
+            return Single(55);
         }
 
         internal static double[] GazeWeights(double x,double y)
@@ -270,6 +465,7 @@ namespace FatFishPet
         private readonly List<double> renderIntervals = new List<double>();
         private TimeSpan previousRenderingTime = TimeSpan.MinValue;
         private double previousRenderClock;
+        private readonly PetParticles particles=new PetParticles();
         private double diagnosticStarted;
         private bool diagnosticsFinished;
         private readonly List<double> activeIntervals=new List<double>(), inactiveIntervals=new List<double>(), drawTimes=new List<double>();
@@ -280,6 +476,10 @@ namespace FatFishPet
         private bool previousWasMix;
         private PetPose pose;
         public AnimationRates Rates { get { return motion.Rates; } set { motion.Rates=value; } }
+        public IdleLook Idle { get { return motion.Idle; } set { motion.Idle=value; } }
+        public Func<bool> InteractionBlockedProvider { get; set; }
+        public void NotifyInteraction() { motion.Idle.Interrupt(clock.Elapsed.TotalSeconds); }
+        public void SampleHeadPointer(double x,double y,bool allowed) { motion.SampleHeadPointer(x,y,clock.Elapsed.TotalSeconds,allowed); }
         public string DiagnosticPath { get; set; }
         public Func<Vector?> CursorOffsetProvider { get; set; }
 
@@ -334,6 +534,9 @@ namespace FatFishPet
             var repairSheet=LoadBitmap("HeadRepairs");int[] targets={18,21,24};
             for(int i=0;i<targets.Length;i++)
             {
+                // Frame 18 now has a complete restored drawing; the older crown patch
+                // has a different palette and must not overwrite its corrected hair.
+                if(targets[i]==18)continue;
                 int index=targets[i];var f=repairs.Sheet.Frames[i];double repairScale=CharacterHeight/f.ScaleHeight;
                 var crop=new CroppedBitmap(repairSheet,new Int32Rect(f.X,f.Y,f.Width,f.Height));
                 var visual=new DrawingVisual();using(var dc=visual.RenderOpen())
@@ -370,12 +573,14 @@ namespace FatFishPet
                 if (now - diagnosticStarted >= 6) WriteDiagnostics(now - diagnosticStarted);
             }
             previousRenderClock = now;
+            motion.InteractionBlocked = InteractionBlockedProvider != null && InteractionBlockedProvider();
             if (CursorOffsetProvider != null && motion.State == PetMotionState.Idle)
             {
                 Vector? offset = CursorOffsetProvider();
                 motion.SetGazeOffset(offset.HasValue ? offset.Value.X : 0, offset.HasValue ? offset.Value.Y : 0, now);
             }
             pose = motion.Evaluate(now);
+            particles.Update(now,motion.EmitHearts,motion.Rates[AnimationKind.Hearts]);
             InvalidateVisual();
         }
 
@@ -423,7 +628,9 @@ namespace FatFishPet
             base.OnRender(dc);
             if (ActualWidth <= 0 || ActualHeight <= 0) return;
             dc.PushTransform(new ScaleTransform(ActualWidth / SceneWidth, ActualHeight / SceneHeight));
-            DrawPose(dc, pose); dc.Pop();
+            DrawPose(dc, pose);
+            dc.PushTransform(new TranslateTransform(0,-27*pose.Lift));
+            particles.Draw(dc);dc.Pop();dc.Pop();
             if(!diagnosticsFinished&&!string.IsNullOrEmpty(DiagnosticPath))drawTimes.Add((Stopwatch.GetTimestamp()-started)*1000.0/Stopwatch.Frequency);
         }
 
@@ -498,6 +705,8 @@ namespace FatFishPet
 
         private byte[] BlinkPixels(int frame,double blink)
         {
+            // Dedicated petting expressions must never sample the old closed-eye atlas.
+            if(frame>=50)return pixels[frame];
             int step=(int)Math.Round(blink*24);
             if(step<=0)return pixels[frame];
             int closed=frame==0?2:frame>=34?frame+8:frame+9;

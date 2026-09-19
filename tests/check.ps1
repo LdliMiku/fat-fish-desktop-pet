@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 $projectDir = Split-Path -Parent $PSScriptRoot
 $buildDir = Join-Path $projectDir '.build'
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
@@ -7,10 +7,11 @@ $references = @('System.dll','System.Core.dll','System.Runtime.Serialization.dll
 $checkExe = Join-Path $buildDir 'AnimationChecks.exe'
 $arguments = @('/nologo','/target:exe','/optimize+','/codepage:65001',('/out:' + $checkExe))
 foreach ($reference in $references) { $arguments += '/reference:' + (Join-Path $frameworkDir $reference) }
+$arguments += '/resource:' + (Join-Path $projectDir 'assets\particles\pink-heart.png') + ',HeartParticle'
 $resources = @{ 'unified-sheet.png' = 'UnifiedSprites'; 'atlas.json' = 'AnimationAtlas'; 'top-repairs.png' = 'HeadRepairs'; 'top-repairs.json' = 'HeadRepairAtlas' }
 foreach ($name in $resources.Keys) { $arguments += '/resource:' + (Join-Path $projectDir ('assets\animations\v6\' + $name)) + ',' + $resources[$name] }
 $arguments += Join-Path $projectDir 'src\PetAnimation.cs'
-$arguments += Join-Path $projectDir 'src\PetSizeMotion.cs'
+$arguments += Join-Path $projectDir 'src\PetParticles.cs'
 $arguments += Join-Path $projectDir 'src\PetMotionWarp.cs'
 $arguments += Join-Path $projectDir 'src\AnimationRates.cs'
 $arguments += Join-Path $projectDir 'src\NumericSettingRow.cs'

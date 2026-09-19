@@ -2,8 +2,10 @@
 !/.build/prepare-v6.cjs
 !/.build/analyze-v6-motion.py
 !/.build/make-bridge-blink-source.cjs
+!/.build/prepare-heart.cjs
 /data/
 /demo/
+/_archive/
 *.log
 Thumbs.db
 Desktop.ini
@@ -11,3 +13,10 @@ tests/*.exe
 /assets/animations/v6/near-*.png
 /assets/animations/v6/far-*.png
 /assets/animations/v6/up-*-source.png
+# 停用的摸头素材：只保留当前使用的 head-pet-manual-sheet.png
+/assets/animations/v6/head-pet-chest-*.png
+/assets/animations/v6/head-pet-fixed-*.png
+/assets/animations/v6/head-pet-original-*.png
+/assets/animations/v6/head-pet-sheet.png
+/assets/animations/v6/head-pet-tone-matched-sheet.png
+/assets/animations/v6/head-pet-yaw-*.png

@@ -86,7 +86,9 @@ namespace FatFishPet
         private NumericSettingRow sizeRow;
         private Window speedWindow;
         private readonly AnimationRates rates=new AnimationRates();
-        private readonly NumericSettingRow[] speedRows=new NumericSettingRow[7];
+        private readonly IdleLook idleLook = new IdleLook();
+        private bool menuOpen, trayMenuOpen;
+        private readonly NumericSettingRow[] speedRows=new NumericSettingRow[AnimationRates.Names.Length];
         private double petHeight = 300;
         private double savedLeft = double.NaN;
         private double savedTop = double.NaN;
@@ -147,6 +149,8 @@ namespace FatFishPet
             Content = surface;
             pet.CursorOffsetProvider = GetCursorOffset;
             pet.Rates=rates;
+            pet.Idle=idleLook;
+            pet.InteractionBlockedProvider=delegate { return pointerPressed || menuOpen || trayMenuOpen || sizeWindow != null || speedWindow != null; };
             ApplyVisualSize();
             if (IsFinite(savedLeft) && IsFinite(savedTop))
             {
@@ -164,6 +168,7 @@ namespace FatFishPet
             MouseWheel += delegate(object sender, MouseWheelEventArgs e)
             {
                 if (!ready || pointerPressed || e.Delta == 0) return;
+                pet.NotifyInteraction();
                 ResizePet(petHeight * Math.Pow(1.05, e.Delta / 120.0));
                 e.Handled = true;
             };
@@ -183,6 +188,8 @@ namespace FatFishPet
                 Visible = true
             };
             var trayMenu = new Forms.ContextMenuStrip();
+            trayMenu.Opened += delegate { trayMenuOpen=true; pet.NotifyInteraction(); };
+            trayMenu.Closed += delegate { trayMenuOpen=false; pet.NotifyInteraction(); };
             trayMenu.Items.Add("找回桌宠", null, delegate { Dispatcher.Invoke(new Action(ResetPosition)); });
             trayMenu.Items.Add("退出桌宠", null, delegate { Dispatcher.Invoke(new Action(Close)); });
             tray.ContextMenuStrip = trayMenu;
@@ -230,10 +237,20 @@ namespace FatFishPet
                 hasGazeCursor = true;
                 lastGazeCursor = cursor;
                 cursorIdleClock.Restart();
+                pet.NotifyInteraction();
             }
-            if (sizeMotion.IsMoving) return lastGazeOffset;
-            if (cursorIdleClock.Elapsed.TotalSeconds >= 5) return lastGazeOffset = new Vector(0, 0);
+            if (sizeMotion.IsMoving)
+            {
+                // Changing scale moves local coordinates even when the mouse is still.
+                // Reset gesture accumulation so zooming cannot impersonate a head stroke.
+                pet.SampleHeadPointer(0,0,false);
+                return lastGazeOffset;
+            }
             Point local = pet.PointFromScreen(new Point(cursor.X, cursor.Y));
+            pet.SampleHeadPointer(local.X / pet.ActualWidth * PetSpriteView.SceneWidth,
+                local.Y / pet.ActualHeight * PetSpriteView.SceneHeight,
+                IsMouseOver && Mouse.LeftButton == MouseButtonState.Released && Mouse.RightButton == MouseButtonState.Released);
+            if (cursorIdleClock.Elapsed.TotalSeconds >= 5) return lastGazeOffset = new Vector(0, 0);
             return lastGazeOffset = new Vector(local.X / pet.ActualWidth * PetSpriteView.SceneWidth - PetSpriteView.SceneWidth / 2,
                 local.Y / pet.ActualHeight * PetSpriteView.SceneHeight - 170);
         }
@@ -251,6 +268,7 @@ namespace FatFishPet
             }
             e.Handled = true;
             pointerPressed = true;
+            pet.NotifyInteraction();
             dragging = false;
             pressLeft = Left;
             pressTop = Top;
@@ -294,6 +312,7 @@ namespace FatFishPet
         private void FinishPointerInteraction(bool allowClick)
         {
             bool wasDragging = dragging;
+            pet.NotifyInteraction();
             pointerPressed = false;
             dragging = false;
             dragClock.Stop();
@@ -321,6 +340,8 @@ namespace FatFishPet
         private ContextMenu CreateMenu()
         {
             var menu = new ContextMenu { FontFamily = new FontFamily("Microsoft YaHei UI"), FontSize = 13 };
+            menu.Opened += delegate { menuOpen=true; pet.NotifyInteraction(); };
+            menu.Closed += delegate { menuOpen=false; pet.NotifyInteraction(); };
             menu.Items.Add(new MenuItem { Header = "大肥鱼 · 桌面小伙伴", IsEnabled = false });
             menu.Items.Add(new Separator());
             var size = new MenuItem { Header = "调节大小…" };
@@ -328,6 +349,23 @@ namespace FatFishPet
             menu.Items.Add(size);
             var speeds=new MenuItem{Header="调节动画速度…"};
             speeds.Click+=delegate { ShowSpeedWindow(); };menu.Items.Add(speeds);
+            var idle = new MenuItem { Header="自主小动作（左右张望）", IsCheckable=true, IsChecked=idleLook.Enabled };
+            idle.Click += delegate { idleLook.Enabled=idle.IsChecked; pet.NotifyInteraction(); SaveSettings(); };
+            menu.Items.Add(idle);
+            var frequency = new MenuItem { Header="张望频率" };
+            string[] frequencyNames={"少", "标准", "多"};
+            for(int i=0;i<frequencyNames.Length;i++)
+            {
+                int selected=i;
+                var item=new MenuItem { Header=frequencyNames[i], IsCheckable=true, IsChecked=idleLook.Frequency==i };
+                item.Click += delegate {
+                    idleLook.Frequency=selected;
+                    for(int j=0;j<frequency.Items.Count;j++)((MenuItem)frequency.Items[j]).IsChecked=j==selected;
+                    pet.NotifyInteraction(); SaveSettings();
+                };
+                frequency.Items.Add(item);
+            }
+            menu.Items.Add(frequency);
             var alwaysOnTop = new MenuItem { Header = "置顶显示", IsCheckable = true, IsChecked = Topmost };
             alwaysOnTop.Click += delegate { Topmost = alwaysOnTop.IsChecked; SaveSettings(); };
             menu.Items.Add(alwaysOnTop);
@@ -355,6 +393,7 @@ namespace FatFishPet
                 window.Top=Math.Max(area.Top,Math.Min(Top+visible.Top,area.Bottom-window.ActualHeight));
             };
             window.KeyDown+=delegate(object sender,KeyEventArgs e){if(e.Key==Key.Escape){window.Close();e.Handled=true;}};
+            window.Closed+=delegate { pet.NotifyInteraction(); };
             return window;
         }
         private void ShowSizeWindow()
@@ -379,7 +418,7 @@ namespace FatFishPet
             var panel=new StackPanel{Margin=new Thickness(22)};
             panel.Children.Add(new TextBlock{Text="动画播放倍率",FontSize=22,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,6)});
             panel.Children.Add(new TextBlock{Text="1 为原速度，2 为两倍速度。范围 0.25–5 倍。\n滑块即时生效；输入后按回车或移开焦点。",Foreground=Brushes.DimGray,Margin=new Thickness(0,0,0,16),TextWrapping=TextWrapping.Wrap});
-            string[] names={"转头跟随","眨眼动作","待机呼吸","拎起过渡","落地过渡","悬空晃动","点击反馈"};
+            string[] names=AnimationRates.Names;
             for(int i=0;i<names.Length;i++)
             {
                 AnimationKind kind=(AnimationKind)i;
@@ -389,7 +428,7 @@ namespace FatFishPet
             panel.Children.Add(new TextBlock{Text="眨眼间隔和静止 5 秒回正的等待时间不受倍率影响。",FontSize=12,Foreground=Brushes.DimGray,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,12)});
             var buttons=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};
             var reset=new Button{Content="全部恢复 1 倍",Padding=new Thickness(12,6,12,6),Margin=new Thickness(0,0,10,0)};
-            reset.Click+=delegate{for(int i=0;i<7;i++){rates[(AnimationKind)i]=1;speedRows[i].SetValue(1);}SaveSettings();};buttons.Children.Add(reset);
+            reset.Click+=delegate{for(int i=0;i<speedRows.Length;i++){rates[(AnimationKind)i]=1;speedRows[i].SetValue(1);}SaveSettings();};buttons.Children.Add(reset);
             var done=new Button{Content="完成",Padding=new Thickness(18,6,18,6)};
             done.Click+=delegate{bool valid=true;foreach(var row in speedRows)if(!row.Commit())valid=false;if(valid)speedWindow.Close();};buttons.Children.Add(done);panel.Children.Add(buttons);
             speedWindow=MakeSettingsWindow("调节动画速度",panel,450);
@@ -488,7 +527,7 @@ namespace FatFishPet
                     if (pair.Length != 2) continue;
                     double value;
                     if (!double.TryParse(pair[1], NumberStyles.Float, CultureInfo.InvariantCulture, out value) || !IsFinite(value)) continue;
-                    if(rates.Read(pair[0],value))continue;
+                    if(rates.Read(pair[0],value)||idleLook.Read(pair[0],value))continue;
                     switch (pair[0])
                     {
                         case "left": savedLeft = value; break;
@@ -519,6 +558,7 @@ namespace FatFishPet
                     "layout=3"
                 };
                 lines.AddRange(rates.ToLines());
+                lines.AddRange(idleLook.ToLines());
                 File.WriteAllLines(settingsPath,lines);
             }
             catch (IOException) { }
