@@ -7,6 +7,7 @@
 /data/
 /demo/
 /_archive/
+/开发文档.md
 *.log
 Thumbs.db
 Desktop.ini

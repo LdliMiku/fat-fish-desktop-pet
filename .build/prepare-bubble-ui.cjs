@@ -186,11 +186,25 @@ const OUT = 'assets/ui';
     if (near) { band = x - edgeX; break; }
   }
   const scale = scaleArg > 0 ? scaleArg : Math.round((3 / Math.max(8, band)) * 1000) / 1000;
+  // 圆角半径：手绘轮廓有抖动，用"连续 24 行/列都贴住边缘"来判断弧线结束，
+  // 取早了会让四角切片小于素材圆角，角就被裁成直角（远离角色那一端会像被切一刀）。
+  const sustained = 24;
   let radiusV = 40, radiusH = 40;
-  for (let y = bodyTop; y <= bodyTop + 400; y++) { if (rowLeft(y) <= bodyLeft + 2) { radiusV = y - bodyTop; break; } }
-  for (let x = bodyLeft; x <= bodyLeft + 400; x++) { if (columnTop(x) <= bodyTop + 2) { radiusH = x - bodyLeft; break; } }
+  for (let y = bodyTop; y <= bodyTop + 600; y++) {
+    let ok = true;
+    for (let k = 0; k < sustained && ok; k++) if (rowLeft(y + k) > bodyLeft + 3) ok = false;
+    if (ok) { radiusV = y - bodyTop; break; }
+  }
+  for (let x = bodyLeft; x <= bodyLeft + 600; x++) {
+    let ok = true;
+    for (let k = 0; k < sustained && ok; k++) if (columnTop(x + k) > bodyTop + 3) ok = false;
+    if (ok) { radiusH = x - bodyLeft; break; }
+  }
   const radius = Math.max(radiusV, radiusH);
-  const cornerPx = Math.round(Math.min(Math.max(radius * 1.35, 80), (bottomLine - bodyTop) * 0.45));
+  const cornerPx = Math.round(Math.min(Math.max(radius * 1.15, 150), (bottomLine - bodyTop) * 0.45));
+  // 四边拉伸条与内边距只跟"描边 + 白圈"的厚度有关，跟圆角大小无关；
+  // 混用会让四角一变大就把气泡整体撑高。
+  const edgePx = Math.round(Math.min(Math.max(radius * 0.55, 90), 170));
   const corner = cornerArg.length === 4 && cornerArg.every((v) => v > 0)
     ? { left: cornerArg[0], right: cornerArg[1], top: cornerArg[2], bottom: cornerArg[3] }
     : { left: cornerPx, right: cornerPx, top: cornerPx, bottom: cornerPx };
@@ -220,14 +234,48 @@ const OUT = 'assets/ui';
   const base = { w: cornerPx, h: cornerPx };
   const keepLeft = over ? Math.min(over.left, tailL - 12) : tailL - 12;
   const keepTop = over ? Math.min(over.top, bottomLine) : bottomLine;
+  // 关键：九宫格的拉伸只能落在"素材上真正平直"的那一段。手绘气泡的两侧通常是长弧线，
+  // 如果把边界切在弧线中间，那一小段弧会被拉伸变形，看起来就像被切了一刀。
+  // 这里对四条边分别求"轮廓位置在 ±3 像素内不变"的最长连续区间，把它当作可拉伸段。
+  const outlineInk = (x, y) => { const p = (y * w + x) * 4; return data[p + 3] > 120 && data[p + 2] - data[p] > 15; };
+  const leftAt = (y) => { for (let x = bodyLeft; x < bodyLeft + 500; x++) if (outlineInk(x, y)) return x; return -1; };
+  const rightAt = (y) => { for (let x = bodyRight; x > bodyRight - 500; x--) if (outlineInk(x, y)) return x; return -1; };
+  const topAt = (x) => { for (let y = bodyTop; y < bodyTop + 500; y++) if (outlineInk(x, y)) return y; return -1; };
+  const bottomAt = (x) => { for (let y = sliceBottom; y > sliceBottom - 500; y--) if (outlineInk(x, y)) return y; return -1; };
+  const longestFlat = (profile, from, to) => {
+    let best = null, run = null;
+    for (let t = from; t <= to; t++) {
+      const v = profile(t);
+      if (v < 0) { run = null; continue; }
+      if (run && Math.abs(v - run.avg) <= 3) { run.to = t; run.avg = (run.avg * (run.to - run.from) + v) / (run.to - run.from + 1); }
+      else run = { from: t, to: t, avg: v };
+      if (!best || run.to - run.from > best.to - best.from) best = { from: run.from, to: run.to };
+    }
+    return best;
+  };
+  const leftFlat = longestFlat(leftAt, bodyTop + 40, bottomLine - 40);
+  const rightFlat = longestFlat(rightAt, bodyTop + 40, bottomLine - 40);
+  const topFlat = longestFlat(topAt, bodyLeft + 40, bodyRight - 40);
+  const bottomFlat = longestFlat(bottomAt, bodyLeft + 40, bodyRight - 40);
+  console.log('flat spans: left ' + JSON.stringify(leftFlat) + ' right ' + JSON.stringify(rightFlat) + ' top ' + JSON.stringify(topFlat) + ' bottom ' + JSON.stringify(bottomFlat));
+  const flatMargin = 8;
+  const sideNeedH = leftFlat ? { top: leftFlat.from - bodyTop + flatMargin, bottom: sliceBottom - leftFlat.to + flatMargin } : null;
+  const sideNeedHR = rightFlat ? { top: rightFlat.from - bodyTop + flatMargin, bottom: sliceBottom - rightFlat.to + flatMargin } : null;
+  const edgeNeedW = topFlat ? { left: topFlat.from - bodyLeft + flatMargin, right: bodyRight - topFlat.to + flatMargin } : null;
+  const edgeNeedWB = bottomFlat ? { left: bottomFlat.from - bodyLeft + flatMargin, right: bodyRight - bottomFlat.to + flatMargin } : null;
   const tlNeed = quadNeed(tlBox, bodyLeft, bodyTop, 1, 1);
   const trNeed = quadNeed(trBox, bodyRight, bodyTop, -1, 1);
   const brNeed = { w: bodyRight - keepLeft + 30, h: sliceBottom - keepTop + 20 };
+  const bodyHeightPx = sliceBottom - bodyTop;
   const corners = {
-    tl: { w: Math.min(Math.round(span * 0.3), Math.max(base.w, tlNeed.w || 0)), h: Math.min(Math.round((sliceBottom - bodyTop) * 0.35), Math.max(base.h, tlNeed.h || 0)) },
-    tr: { w: Math.min(Math.round(span * 0.3), Math.max(base.w, trNeed.w || 0)), h: Math.min(Math.round((sliceBottom - bodyTop) * 0.4), Math.max(base.h, trNeed.h || 0)) },
-    bl: { w: base.w, h: base.h },
-    br: { w: Math.min(Math.round(span * 0.62), Math.max(base.w, brNeed.w)), h: Math.min(Math.round((sliceBottom - bodyTop) * 0.7), Math.max(base.h, brNeed.h)) }
+    tl: { w: Math.min(Math.round(span * 0.45), Math.max(base.w, tlNeed.w || 0, edgeNeedW ? edgeNeedW.left : 0)),
+          h: Math.min(Math.round(bodyHeightPx * 0.45), Math.max(base.h, tlNeed.h || 0, sideNeedH ? sideNeedH.top : 0)) },
+    tr: { w: Math.min(Math.round(span * 0.45), Math.max(base.w, trNeed.w || 0, edgeNeedW ? edgeNeedW.right : 0)),
+          h: Math.min(Math.round(bodyHeightPx * 0.45), Math.max(base.h, trNeed.h || 0, sideNeedHR ? sideNeedHR.top : 0)) },
+    bl: { w: Math.min(Math.round(span * 0.45), Math.max(base.w, edgeNeedWB ? edgeNeedWB.left : 0)),
+          h: Math.min(Math.round(bodyHeightPx * 0.45), Math.max(base.h, sideNeedH ? sideNeedH.bottom : 0)) },
+    br: { w: Math.min(Math.round(span * 0.62), Math.max(base.w, brNeed.w, edgeNeedWB ? edgeNeedWB.right : 0)),
+          h: Math.min(Math.round(bodyHeightPx * 0.7), Math.max(base.h, brNeed.h, sideNeedHR ? sideNeedHR.bottom : 0)) }
   };
   console.log('decoration boxes: TL ' + JSON.stringify(tlBox) + ' TR ' + JSON.stringify(trBox) + ' -> corners ' + JSON.stringify(corners));
   const shellW = over ? over.right - over.left : 0, shellH = over ? over.bottom - over.top : 0;
@@ -238,7 +286,7 @@ const OUT = 'assets/ui';
     body: { left: bodyLeft, top: bodyTop, right: bodyRight, bottom: sliceBottom },
     corner: corners,
     // 四边拉伸条的厚度（取素材自身圆角大小），四个方向一致。
-    edge: { w: cornerPx, h: cornerPx },
+    edge: { w: edgePx, h: edgePx },
     tail: {
       w: tailCrop.width, h: tailCrop.height,
       tipX: (tailL + tailR) / 2 - tailCrop.left, tipY: tailTip - tailCrop.top,
@@ -247,10 +295,10 @@ const OUT = 'assets/ui';
     shell: over ? { w: shellW, h: shellH, leftOfBodyRight: bodyRight - over.left, topAboveBottom: bottomLine - over.top } : null,
     padding: {
       // 尽量贴合文字：右下角切片虽然很宽（要包住鲸鱼），但文字不必退那么多，按上限计算。
-      left: Math.round(cornerPx * scale * 1.2 + 6),
+      left: Math.round(edgePx * scale * 1.2 + 6),
       right: Math.round(Math.min(corners.br.w, 260) * scale * 0.9 + 8),
-      top: Math.round(cornerPx * scale * 0.9 + 4),
-      bottom: Math.round(cornerPx * scale * 0.7 + 5)
+      top: Math.round(edgePx * scale * 0.9 + 4),
+      bottom: Math.round(edgePx * scale * 0.7 + 5)
     },
     text: { maxWidth: 280, ink: '#' + borderSample.map((v) => Math.round(Math.max(0, Math.min(255, v * 0.5))).toString(16).padStart(2, '0')).join('') }
   };

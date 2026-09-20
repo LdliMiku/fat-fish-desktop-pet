@@ -5,6 +5,7 @@ $references = @('System.dll','System.Core.dll','System.Runtime.Serialization.dll
 $arguments = @('/nologo','/target:exe','/optimize+','/codepage:65001',('/out:' + (Join-Path $PSScriptRoot 'AnimationChecks.exe')))
 foreach ($reference in $references) { $arguments += '/reference:' + (Join-Path $frameworkDir $reference) }
 $arguments += '/resource:' + (Join-Path $projectDir 'assets\particles\pink-heart.png') + ',HeartParticle'
+$arguments += '/resource:' + (Join-Path $projectDir 'assets\particles\pink-heart-large.png') + ',HeartParticleLarge'
 $resources = @{ 'unified-sheet.png' = 'UnifiedSprites'; 'atlas.json' = 'AnimationAtlas'; 'top-repairs.png' = 'HeadRepairs'; 'top-repairs.json' = 'HeadRepairAtlas' }
 foreach ($name in $resources.Keys) { $arguments += '/resource:' + (Join-Path $projectDir ('assets\animations\v6\' + $name)) + ',' + $resources[$name] }
 $arguments += Join-Path $projectDir 'src\PetAnimation.cs'

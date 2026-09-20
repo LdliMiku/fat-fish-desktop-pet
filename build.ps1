@@ -13,6 +13,9 @@ foreach ($reference in $references) { $compilerArgs += '/reference:' + (Join-Pat
 $heartAsset=Join-Path $projectDir 'assets\particles\pink-heart.png'
 if (-not (Test-Path -LiteralPath $heartAsset)) { throw '缺少爱心粒子素材。' }
 $compilerArgs += '/resource:' + $heartAsset + ',HeartParticle'
+$heartLargeAsset=Join-Path $projectDir 'assets\particles\pink-heart-large.png'
+if (-not (Test-Path -LiteralPath $heartLargeAsset)) { throw '缺少大爱心粒子素材。' }
+$compilerArgs += '/resource:' + $heartLargeAsset + ',HeartParticleLarge'
 $uiAssets = @{ 'bubble-body.png' = 'BubbleBody'; 'bubble-tail.png' = 'BubbleTail'; 'bubble-whale.png' = 'BubbleWhale' }
 $compilerArgs += '/resource:' + (Join-Path $projectDir 'assets\ui\bubble-meta.json') + ',BubbleMeta'
 foreach ($name in $uiAssets.Keys) {
