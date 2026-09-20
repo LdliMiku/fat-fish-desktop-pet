@@ -3,6 +3,7 @@
 !/.build/analyze-v6-motion.py
 !/.build/make-bridge-blink-source.cjs
 !/.build/prepare-heart.cjs
+!/.build/prepare-bubble-ui.cjs
 /data/
 /demo/
 /_archive/

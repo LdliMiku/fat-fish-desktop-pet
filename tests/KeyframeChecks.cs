@@ -330,7 +330,12 @@ internal static class AnimationChecks
                 double t=i/120.0;m.SetGazeOffset(0,0,t);var p=m.Evaluate(t);Valid(p);
                 if(m.Idle.Active&&!previous)
                 {
-                    Check(t-end>=39.9,"Idle cooldown too short");start=t;
+                    if(end>0)
+                    {
+                        Check(t-end>=IdleLook.DefaultInterval*.88-.1,"Idle cooldown too short");
+                        Check(t-end<=IdleLook.DefaultInterval*1.12+.1,"Idle cooldown too long");
+                    }
+                    start=t;
                     int direction=Math.Sign(p.LookX);Check(cycles==0||direction==-first,"Idle repeated first direction");first=direction;
                     cycles++;left=right=false;
                 }
@@ -359,15 +364,30 @@ internal static class AnimationChecks
             Same(before,after,"Idle interruption "+interruption);
             for(int i=1;i<1500;i++){m.SetGazeOffset(0,0,t+i*.01);m.Evaluate(t+i*.01);Check(!m.Idle.Active,"Idle resumed too soon");}
         }
-        var settings=new IdleLook();Check(settings.Enabled&&settings.Frequency==1,"Old settings defaults failed");
-        settings.Read("idleLookEnabled",0);settings.Read("idleLookFrequency",2);
+        var settings=new IdleLook();Check(settings.Enabled&&Math.Abs(settings.Interval-IdleLook.DefaultInterval)<.001,"Old settings defaults failed");
+        settings.Read("idleLookEnabled",0);settings.Read("idleLookInterval",27);
         var loaded=new IdleLook();foreach(string line in settings.ToLines()){var pair=line.Split('=');loaded.Read(pair[0],double.Parse(pair[1],CultureInfo.InvariantCulture));}
-        Check(!loaded.Enabled&&loaded.Frequency==2,"Idle settings roundtrip failed");
-        var sparse=new IdleLook(new Random(7)){Frequency=0};var frequent=new IdleLook(new Random(7)){Frequency=2};
-        sparse.Interrupt(0);frequent.Interrupt(0);double sparseAt=0,frequentAt=0;
-        for(int i=0;i<12000;i++){double t=i*.01;sparse.Update(t,.01,1,false,true);frequent.Update(t,.01,1,false,true);if(sparse.Active&&sparseAt==0)sparseAt=t;if(frequent.Active&&frequentAt==0)frequentAt=t;}
-        Check(frequentAt>=30&&frequentAt<=42.5&&sparseAt>=60&&sparseAt<=110,"Frequency windows failed");
-        Console.WriteLine("PASS: autonomous look timing, full poses, alternation, rates, interruptions, settings and frequency");
+        Check(!loaded.Enabled&&Math.Abs(loaded.Interval-27)<.001,"Idle settings roundtrip failed");
+        Check(IdleLook.MinimumInterval==10&&IdleLook.MaximumInterval==30&&Math.Abs(new IdleLook().Interval-IdleLook.DefaultInterval)<.001,"Idle interval range failed");
+        var legacy=new IdleLook();
+        legacy.Read("idleLookFrequency",2);Check(Math.Abs(legacy.Interval-15)<.001,"Legacy frequency mapping failed");
+        var legacyOld=new IdleLook();legacyOld.Read("idleLookFrequency",0);Check(Math.Abs(legacyOld.Interval-30)<.001,"Legacy sparse mapping failed");
+        var legacyStandard=new IdleLook();legacyStandard.Read("idleLookFrequency",1);Check(Math.Abs(legacyStandard.Interval-20)<.001,"Legacy standard mapping failed");
+        var orderSafe=new IdleLook();orderSafe.Read("idleLookFrequency",2);orderSafe.Read("idleLookInterval",24);
+        Check(Math.Abs(orderSafe.Interval-24)<.001,"New interval key ignored");
+        foreach(double interval in new[]{IdleLook.MinimumInterval,IdleLook.DefaultInterval,IdleLook.MaximumInterval})
+        {
+            var look=new IdleLook(new Random(7)){Interval=interval};
+            look.Interrupt(0);double at=0;
+            for(int i=0;i<12000&&at==0;i++){double t=i*.01;look.Update(t,.01,1,false,true);if(look.Active)at=t;}
+            double low=Math.Max(IdleLook.MinimumInterval,interval*.88),high=Math.Min(IdleLook.MaximumInterval,interval*1.12);
+            Check(at>=low-.05&&at<=high+.05,"Idle interval window failed at "+interval);
+        }
+        var wider=new IdleLook(new Random(3));wider.Read("idleLookInterval",99);
+        Check(Math.Abs(wider.Interval-IdleLook.MaximumInterval)<.001,"Idle interval upper clamp failed");
+        var lower=new IdleLook(new Random(3));lower.Read("idleLookInterval",1);
+        Check(Math.Abs(lower.Interval-IdleLook.MinimumInterval)<.001,"Idle interval lower clamp failed");
+        Console.WriteLine("PASS: autonomous look timing, full poses, alternation, rates, interruptions, settings and 10-30s interval");
     }
 
     private static void SingleDrawingChecks()

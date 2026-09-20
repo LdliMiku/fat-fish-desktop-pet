@@ -15,7 +15,7 @@ namespace FatFishPet
         public event Action<double> ValueChanged;
         public double Value { get { return slider.Value; } }
         public double Maximum { get { return slider.Maximum; } set { slider.Maximum=value; } }
-        public NumericSettingRow(string title,string unit,double minimum,double maximum,double value)
+        public NumericSettingRow(string title,string unit,double minimum,double maximum,double value,double step=0)
         {
             Margin=new Thickness(0,0,0,12);
             Children.Add(new TextBlock{Text=title,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,5)});
@@ -24,8 +24,9 @@ namespace FatFishPet
             DockPanel.SetDock(suffix,Dock.Right);line.Children.Add(suffix);
             input=new TextBox{Width=78,Padding=new Thickness(5),VerticalContentAlignment=VerticalAlignment.Center};
             DockPanel.SetDock(input,Dock.Right);line.Children.Add(input);
-            slider=new Slider{Minimum=minimum,Maximum=maximum,Value=value,IsSnapToTickEnabled=false,IsMoveToPointEnabled=true,
-                SmallChange=unit=="%"?1:.05,LargeChange=unit=="%"?10:.25,Margin=new Thickness(0,0,12,0),VerticalAlignment=VerticalAlignment.Center};
+            // step>0 时滑块按该步长吸附，用于秒这类整数档位；step 为 0 时保持原来的连续调节。
+            slider=new Slider{Minimum=minimum,Maximum=maximum,Value=value,IsSnapToTickEnabled=step>0,TickFrequency=step>0?step:0,IsMoveToPointEnabled=true,
+                SmallChange=step>0?step:(unit=="%"?1:.05),LargeChange=step>0?step*5:(unit=="%"?10:.25),Margin=new Thickness(0,0,12,0),VerticalAlignment=VerticalAlignment.Center};
             line.Children.Add(slider);Children.Add(line);
             error=new TextBlock{Foreground=Brushes.Firebrick,FontSize=11,Visibility=Visibility.Collapsed,Margin=new Thickness(0,3,0,0)};Children.Add(error);
             System.Windows.Automation.AutomationProperties.SetName(input,title+"输入");

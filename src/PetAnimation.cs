@@ -55,7 +55,12 @@ namespace FatFishPet
     {
         private readonly Random random;
         public bool Enabled = true;
-        public int Frequency = 1;
+        // 两次左右张望之间的等待时间（秒），用户可在 10–30 秒之间调节。
+        public double Interval = DefaultInterval;
+        public const double MinimumInterval = 10;
+        public const double MaximumInterval = 30;
+        public const double DefaultInterval = 20;
+        private bool intervalLoaded;
         private double next = double.NaN, progress;
         private int direction;
         public bool Active { get; private set; }
@@ -63,9 +68,13 @@ namespace FatFishPet
         internal IdleLook(Random source) { random = source; direction = random.Next(2) == 0 ? -1 : 1; }
         public void Interrupt(double now)
         {
-            Active = false; progress = 0;
-            double factor = Frequency == 0 ? 2 : Frequency == 2 ? .5 : 1;
-            next = now + 20 + (20 + random.NextDouble() * 25) * factor;
+            Active = false; progress = 0; next = now + NextGap();
+        }
+        // 每次等待在设定值附近小幅浮动，避免机械感，结果始终留在 10–30 秒内。
+        private double NextGap()
+        {
+            double gap = Interval * (.88 + random.NextDouble() * .24);
+            return Math.Max(MinimumInterval, Math.Min(MaximumInterval, gap));
         }
         public double Update(double now, double delta, double rate, bool blocked, bool neutral)
         {
@@ -83,10 +92,20 @@ namespace FatFishPet
         {
             if (double.IsNaN(value) || double.IsInfinity(value)) return false;
             if (key == "idleLookEnabled") { Enabled = value != 0; return true; }
-            if (key == "idleLookFrequency") { Frequency = Math.Max(0, Math.Min(2, (int)value)); return true; }
+            if (key == "idleLookInterval") { Interval = Math.Max(MinimumInterval, Math.Min(MaximumInterval, value)); intervalLoaded = true; return true; }
+            // 旧版离散频率：少／标准／多 → 30／20／15 秒；已有新键时不覆盖。
+            if (key == "idleLookFrequency")
+            {
+                if (!intervalLoaded) Interval = value <= 0 ? MaximumInterval : value >= 2 ? 15 : DefaultInterval;
+                return true;
+            }
             return false;
         }
-        public string[] ToLines() { return new[] { "idleLookEnabled=" + (Enabled ? "1" : "0"), "idleLookFrequency=" + Frequency }; }
+        public string[] ToLines()
+        {
+            return new[] { "idleLookEnabled=" + (Enabled ? "1" : "0"),
+                           "idleLookInterval=" + Interval.ToString("0.##", CultureInfo.InvariantCulture) };
+        }
     }
 
     internal sealed class HeadPetGesture
@@ -119,6 +138,8 @@ namespace FatFishPet
         internal static readonly int[] DirectionFrames={16,17,18,19,21,22,23,24};
         public AnimationRates Rates = new AnimationRates();
         public IdleLook Idle = new IdleLook();
+        // 摸头手势触发时的回调，用来让主动搭话接一句台词。
+        public Action Petted;
         public bool InteractionBlocked;
         public readonly HeadPetGesture HeadGesture = new HeadPetGesture();
         private double petProgress, petRecoveryProgress, petCooldown;
@@ -156,6 +177,7 @@ namespace FatFishPet
                 targetX=targetY=0;gazeSector=-1;petGazeHandoff=false;
                 petActive=true;petProgress=0;petLastStroke=petPointerTime=now;
                 petPointerX=x;petPointerTracked=true;Idle.Interrupt(now);
+                var pettedHandler=Petted;if(pettedHandler!=null)pettedHandler();
             }
         }
         private double actionClock, breathClock, swayClock, blinkClock, lastClock;
@@ -477,6 +499,7 @@ namespace FatFishPet
         private PetPose pose;
         public AnimationRates Rates { get { return motion.Rates; } set { motion.Rates=value; } }
         public IdleLook Idle { get { return motion.Idle; } set { motion.Idle=value; } }
+        public Action Petted { get { return motion.Petted; } set { motion.Petted=value; } }
         public Func<bool> InteractionBlockedProvider { get; set; }
         public void NotifyInteraction() { motion.Idle.Interrupt(clock.Elapsed.TotalSeconds); }
         public void SampleHeadPointer(double x,double y,bool allowed) { motion.SampleHeadPointer(x,y,clock.Elapsed.TotalSeconds,allowed); }

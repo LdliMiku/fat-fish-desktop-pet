@@ -1,11 +1,8 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $projectDir = Split-Path -Parent $PSScriptRoot
-$buildDir = Join-Path $projectDir '.build'
-New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 $frameworkDir = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
 $references = @('System.dll','System.Core.dll','System.Runtime.Serialization.dll','WPF\WindowsBase.dll','WPF\PresentationCore.dll','WPF\PresentationFramework.dll','System.Xaml.dll')
-$checkExe = Join-Path $buildDir 'AnimationChecks.exe'
-$arguments = @('/nologo','/target:exe','/optimize+','/codepage:65001',('/out:' + $checkExe))
+$arguments = @('/nologo','/target:exe','/optimize+','/codepage:65001',('/out:' + (Join-Path $PSScriptRoot 'AnimationChecks.exe')))
 foreach ($reference in $references) { $arguments += '/reference:' + (Join-Path $frameworkDir $reference) }
 $arguments += '/resource:' + (Join-Path $projectDir 'assets\particles\pink-heart.png') + ',HeartParticle'
 $resources = @{ 'unified-sheet.png' = 'UnifiedSprites'; 'atlas.json' = 'AnimationAtlas'; 'top-repairs.png' = 'HeadRepairs'; 'top-repairs.json' = 'HeadRepairAtlas' }
@@ -20,9 +17,5 @@ if (Test-Path -LiteralPath $motionField) { $arguments += '/resource:' + $motionF
 $arguments += Join-Path $PSScriptRoot 'KeyframeChecks.cs'
 & (Join-Path $frameworkDir 'csc.exe') @arguments
 if ($LASTEXITCODE -ne 0) { throw 'Animation checks compilation failed' }
-Push-Location $projectDir
-try {
-    New-Item -ItemType Directory -Force -Path 'demo/animation-qa','.build/motion-inputs' | Out-Null
-    & $checkExe @args
-    if ($LASTEXITCODE -ne 0) { throw 'Animation checks failed' }
-} finally { Pop-Location }
+& (Join-Path $PSScriptRoot 'AnimationChecks.exe') @args
+if ($LASTEXITCODE -ne 0) { throw 'Animation checks failed' }

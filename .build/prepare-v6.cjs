@@ -60,7 +60,58 @@ async function readSheet(file,expected=9){
   const {file,frame:f}=sources[i],left=(i%4)*cw+4,top=Math.floor(i/4)*ch+4;
   layers.push({input:await sharp(file).extract({left:f.x,top:f.y,width:f.w,height:f.h}).png().toBuffer(),left,top});frames.push({...f,x:left,y:top});
  }
- await sharp({create:{width:cw*4,height:ch*Math.ceil(sources.length/4),channels:4,background:{r:0,g:0,b:0,alpha:0}}}).composite(layers).png().toFile(dir+'/unified-sheet.png');
+ const sheetWidth=cw*4,sheetHeight=ch*Math.ceil(sources.length/4);
+ const composed=await sharp({create:{width:sheetWidth,height:sheetHeight,channels:4,background:{r:0,g:0,b:0,alpha:0}}}).composite(layers).png().toBuffer();
+ // 色调统一：以正视帧（第 0 帧）为基准，把每一帧的不透明像素平均亮度调到同一水平，
+ // 这样各个动作之间切换时不再出现明暗跳变。只改 RGB，alpha、几何与注册数据完全不动；
+ // 单帧修正量限制在 ±8 之内，避免异常素材被过度拉伸。
+ // 统计每帧的不透明像素、整体通道和、蓝度权重总和，以及"蓝色像素"（w>0.75）的通道和。
+ // 蓝度 w 会平滑过渡，避免在阈值附近产生可见的色块边界。
+ const MAX_TONE_SHIFT=10,ALPHA_FLOOR=8,OPAQUE=200,BLUE_W=.75;
+ const raw=await sharp(composed).ensureAlpha().raw().toBuffer({resolveWithObject:true});
+ const blueness=(r,g,b)=>Math.max(0,Math.min(1,(b-r-20)/40));
+ const stats=frames.map(f=>{
+  const s={n:0,sum:[0,0,0],wSum:0,blueN:0,blueSum:[0,0,0],wBlueSum:0};
+  for(let y=f.y;y<f.y+f.h;y++)for(let x=f.x;x<f.x+f.w;x++){
+   const p=(y*sheetWidth+x)*4;if(raw.data[p+3]<=OPAQUE)continue;
+   const r=raw.data[p],g=raw.data[p+1],b=raw.data[p+2],w=blueness(r,g,b);
+   s.n++;s.sum[0]+=r;s.sum[1]+=g;s.sum[2]+=b;s.wSum+=w;
+   if(w>BLUE_W){s.blueN++;s.blueSum[0]+=r;s.blueSum[1]+=g;s.blueSum[2]+=b;s.wBlueSum+=w;}
+  }
+  return s;
+ });
+ // 每帧求一组"基础偏移 + 蓝度加权偏移"，同时满足：整体均值对齐基准帧、蓝色像素均值对齐基准帧。
+ const target=stats[0];
+ const shifts=stats.map(s=>{
+  const shift=[0,0,0];
+  if(s.n===0)return shift;
+  for(let c=0;c<3;c++){
+   const m=s.sum[c]/s.n,b=s.blueN>0?s.blueSum[c]/s.blueN:m;
+   const tm=target.sum[c]/target.n,tb=target.blueN>0?target.blueSum[c]/target.blueN:tm;
+   const det=s.n*s.wBlueSum-s.wSum*s.blueN;
+   if(Math.abs(det)<1e-6||s.blueN===0){shift[c]={base:tm-m,extra:0};continue;}
+   const A=s.n*(tm-m),B=s.blueN*(tb-b);
+   shift[c]={base:(s.wBlueSum*A-s.wSum*B)/det,extra:(s.n*B-s.blueN*A)/det};
+  }
+  return shift;
+ });
+ const clampShift=v=>Math.max(-MAX_TONE_SHIFT,Math.min(MAX_TONE_SHIFT,v));
+ const out=Buffer.from(raw.data);
+ for(let i=1;i<frames.length;i++){
+  const f=frames[i],s=shifts[i];
+  for(let y=f.y;y<f.y+f.h;y++)for(let x=f.x;x<f.x+f.w;x++){
+   const p=(y*sheetWidth+x)*4;if(out[p+3]<=ALPHA_FLOOR)continue;
+   const r=out[p],g=out[p+1],b=out[p+2],w=blueness(r,g,b);
+   for(let c=0;c<3;c++){
+    const d=clampShift(s[c].base+s[c].extra*w);
+    const value=out[p+c]+d;
+    out[p+c]=value<0?0:value>255?255:Math.round(value);
+   }
+  }
+ }
+ await sharp(out,{raw:{width:sheetWidth,height:sheetHeight,channels:4}}).png().toFile(dir+'/unified-sheet.png');
  old.sheet.frames=frames;old.sheet.width=cw*4;old.sheet.height=ch*Math.ceil(sources.length/4);old.version='0.1';
- fs.writeFileSync(dir+'/atlas.json',JSON.stringify(old,null,2));console.log({frames:frames.length,cell:[cw,ch]});
+ fs.writeFileSync(dir+'/atlas.json',JSON.stringify(old,null,2));
+ const summary=shifts.map((s,i)=>({frame:i,base:s.map(v=>Math.round(v.base*10)/10),blueExtra:s.map(v=>Math.round(v.extra*10)/10)}));
+ console.log({frames:frames.length,cell:[cw,ch],toneBaseFrames:summary.filter(v=>v.frame<3||v.frame%13===0).length,exampleShifts:summary.filter(v=>[16,17,24,35,41,50,55].includes(v.frame))});
 })().catch(e=>{console.error(e);process.exitCode=1});
